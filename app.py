@@ -1,461 +1,484 @@
 from flask import Flask, render_template_string, request, jsonify, session, redirect, url_for
-from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
-import os
-import json
+from uuid import uuid4
 from functools import wraps
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'pawn_shop_secret_2024'
+app.config['SECRET_KEY'] = 'pawn_shop_secret_key_2024'
 
-# Database config - use PostgreSQL on Render, SQLite locally
-database_url = os.environ.get('DATABASE_URL')
-if database_url:
-    # Fix postgres:// to postgresql://
-    if database_url.startswith('postgres://'):
-        database_url = database_url.replace('postgres://', 'postgresql://', 1)
-    app.config['SQLALCHEMY_DATABASE_URI'] = database_url
-else:
-    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///pawn_shop.db'
+# In-memory storage
+users_db = {}
+items_db = {}
+loans_db = {}
 
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+def gen_id():
+    return str(uuid4())[:10]
 
-db = SQLAlchemy(app)
-
-# ============ DATABASE MODELS ============
-
-class User(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), unique=True, nullable=False)
-    email = db.Column(db.String(120), unique=True, nullable=False)
-    password_hash = db.Column(db.String(255), nullable=False)
-    phone = db.Column(db.String(20))
-    date_of_birth = db.Column(db.Date)
-    place_of_residence = db.Column(db.String(255))
-    employment_status = db.Column(db.String(50))  # employed, self-employed, unemployed, student
-    profile_picture = db.Column(db.Text)  # base64 or URL
-    is_admin = db.Column(db.Boolean, default=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
-    def set_password(self, password):
-        self.password_hash = generate_password_hash(password)
-    
-    def check_password(self, password):
-        return check_password_hash(self.password_hash, password)
-
-class Item(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(120), nullable=False)
-    category = db.Column(db.String(80), nullable=False)
-    description = db.Column(db.Text)
-    pawn_value = db.Column(db.Float, nullable=False)
-    loan_duration_days = db.Column(db.Integer, default=30)
-    interest_rate = db.Column(db.Float, default=15.0)
-    image_url = db.Column(db.String(255))
-    status = db.Column(db.String(20), default='available')  # available, pawned, sold
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
-class Loan(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=False)
-    loan_amount = db.Column(db.Float, nullable=False)
-    interest_rate = db.Column(db.Float, nullable=False)
-    loan_date = db.Column(db.DateTime, default=datetime.utcnow)
-    due_date = db.Column(db.DateTime, nullable=False)
-    status = db.Column(db.String(20), default='active')  # active, repaid, forfeited
-    amount_due = db.Column(db.Float, nullable=False)
-    
-    user = db.relationship('User', backref=db.backref('loans', lazy=True))
-    item = db.relationship('Item', backref=db.backref('loans', lazy=True))
-
-# ============ AUTHENTICATION ============
+# ============ DECORATORS ============
 
 def login_required(f):
     @wraps(f)
-    def decorated_function(*args, **kwargs):
+    def decorated(*args, **kwargs):
         if 'user_id' not in session:
             return redirect(url_for('login'))
         return f(*args, **kwargs)
-    return decorated_function
+    return decorated
 
 def admin_required(f):
     @wraps(f)
-    def decorated_function(*args, **kwargs):
+    def decorated(*args, **kwargs):
         if 'user_id' not in session:
-            return redirect(url_for('login'))
-        user = User.query.get(session['user_id'])
-        if not user or not user.is_admin:
+            return redirect(url_for('home'))
+        if not users_db[session['user_id']].get('is_admin'):
             return redirect(url_for('home'))
         return f(*args, **kwargs)
-    return decorated_function
+    return decorated
 
-# ============ ROUTES - AUTH ============
+# ============ ROUTES ============
+
+@app.route('/')
+def home():
+    return render_template_string(HOME)
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if request.method == 'POST':
-        try:
-            data = request.get_json()
-            username = data.get('username')
-            email = data.get('email')
-            password = data.get('password')
-            phone = data.get('phone')
-            dob = data.get('date_of_birth')
-            residence = data.get('place_of_residence')
-            employment = data.get('employment_status')
-            profile_pic = data.get('profile_picture')
-            
-            if User.query.filter_by(username=username).first():
-                return jsonify({'error': 'Username exists'}), 400
-            if User.query.filter_by(email=email).first():
-                return jsonify({'error': 'Email exists'}), 400
-            
-            user = User(
-                username=username,
-                email=email,
-                phone=phone,
-                date_of_birth=dob,
-                place_of_residence=residence,
-                employment_status=employment,
-                profile_picture=profile_pic
-            )
-            user.set_password(password)
-            db.session.add(user)
-            db.session.commit()
-            
-            return jsonify({'success': True, 'message': 'Registered! Please login'}), 201
-        except Exception as e:
-            return jsonify({'error': str(e)}), 400
-    
-    return render_template_string(AUTH_TEMPLATE)
-
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
         data = request.get_json()
-        username = data.get('username')
+        username = data.get('username', '').strip()
+        email = data.get('email', '').strip()
         password = data.get('password')
+        phone = data.get('phone', '').strip()
+        dob = data.get('dob')
+        employment = data.get('employment')
+        residence_proof = data.get('residence_proof', '')
         
-        user = User.query.filter_by(username=username).first()
-        if user and user.check_password(password):
-            session['user_id'] = user.id
-            session['username'] = user.username
-            session['is_admin'] = user.is_admin
-            return jsonify({'success': True, 'is_admin': user.is_admin}), 200
+        # Validate
+        if not all([username, email, password, dob, employment, residence_proof]):
+            return jsonify({'error': 'All fields required'}), 400
         
-        return jsonify({'error': 'Invalid credentials'}), 401
+        # Check if user exists
+        for u in users_db.values():
+            if u['username'] == username:
+                return jsonify({'error': 'Username taken'}), 400
+            if u['email'] == email:
+                return jsonify({'error': 'Email taken'}), 400
+        
+        # Create user
+        uid = gen_id()
+        users_db[uid] = {
+            'id': uid,
+            'username': username,
+            'email': email,
+            'password_hash': generate_password_hash(password),
+            'phone': phone,
+            'dob': dob,
+            'employment': employment,
+            'residence_proof': residence_proof,
+            'is_admin': False,
+            'created': datetime.utcnow().isoformat()
+        }
+        
+        return jsonify({'success': True, 'msg': 'Account created! Login now'}), 201
     
-    return render_template_string(AUTH_TEMPLATE)
+    return render_template_string(AUTH_PAGE)
+
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    username = data.get('username')
+    password = data.get('password')
+    
+    for uid, u in users_db.items():
+        if u['username'] == username and check_password_hash(u['password_hash'], password):
+            session['user_id'] = uid
+            session['username'] = username
+            return jsonify({'success': True, 'is_admin': u['is_admin']}), 200
+    
+    return jsonify({'error': 'Invalid credentials'}), 401
 
 @app.route('/logout')
 def logout():
     session.clear()
     return redirect(url_for('home'))
 
-# ============ ROUTES - MAIN ============
-
-@app.route('/')
-def home():
-    return render_template_string(HOME_TEMPLATE)
-
 @app.route('/browse')
+@login_required
 def browse():
-    return render_template_string(BROWSE_TEMPLATE)
+    return render_template_string(BROWSE_PAGE)
 
 @app.route('/api/items')
-def get_items():
-    try:
-        category = request.args.get('category', '')
-        query = Item.query.filter_by(status='available')
-        if category and category != '':
-            query = query.filter_by(category=category)
-        items = query.all()
-        return jsonify([{
-            'id': item.id,
-            'name': item.name,
-            'category': item.category,
-            'description': item.description,
-            'pawn_value': item.pawn_value,
-            'loan_duration_days': item.loan_duration_days,
-            'interest_rate': item.interest_rate,
-            'image_url': item.image_url
-        } for item in items])
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+@login_required
+def api_items():
+    cat = request.args.get('cat', '')
+    result = []
+    for iid, item in items_db.items():
+        if item['status'] == 'available':
+            if not cat or item['category'] == cat:
+                result.append({
+                    'id': iid,
+                    'name': item['name'],
+                    'category': item['category'],
+                    'desc': item['desc'],
+                    'value': item['value'],
+                    'rate': item['rate'],
+                    'days': item['days']
+                })
+    return jsonify(result)
 
 @app.route('/api/pawn', methods=['POST'])
 @login_required
-def pawn_item():
+def api_pawn():
     data = request.get_json()
-    item_id = data.get('item_id')
+    iid = data.get('iid')
     
-    item = Item.query.get(item_id)
-    if not item or item.status != 'available':
-        return jsonify({'error': 'Item not available'}), 400
+    if iid not in items_db:
+        return jsonify({'error': 'Item not found'}), 404
     
-    loan_amount = item.pawn_value
-    interest_rate = item.interest_rate
-    due_date = datetime.utcnow() + timedelta(days=item.loan_duration_days)
-    amount_due = loan_amount * (1 + interest_rate / 100)
+    item = items_db[iid]
+    if item['status'] != 'available':
+        return jsonify({'error': 'Not available'}), 400
     
-    loan = Loan(
-        user_id=session['user_id'],
-        item_id=item_id,
-        loan_amount=loan_amount,
-        interest_rate=interest_rate,
-        due_date=due_date,
-        amount_due=amount_due
-    )
+    loan_amt = item['value']
+    interest = item['rate']
+    due = datetime.utcnow() + timedelta(days=item['days'])
+    total_due = loan_amt * (1 + interest / 100)
     
-    item.status = 'pawned'
-    db.session.add(loan)
-    db.session.commit()
+    lid = gen_id()
+    loans_db[lid] = {
+        'id': lid,
+        'user': session['user_id'],
+        'item': iid,
+        'amount': loan_amt,
+        'rate': interest,
+        'due': due.isoformat(),
+        'status': 'active',
+        'total_due': round(total_due, 2),
+        'created': datetime.utcnow().isoformat()
+    }
+    
+    item['status'] = 'pawned'
     
     return jsonify({
         'success': True,
-        'loan_id': loan.id,
-        'loan_amount': loan_amount,
-        'amount_due': round(amount_due, 2),
-        'due_date': due_date.strftime('%Y-%m-%d')
+        'loan_id': lid,
+        'amount': loan_amt,
+        'total_due': round(total_due, 2),
+        'due_date': due.strftime('%Y-%m-%d')
     }), 201
 
 @app.route('/dashboard')
 @login_required
 def dashboard():
-    user = User.query.get(session['user_id'])
-    return render_template_string(DASHBOARD_TEMPLATE, user=user)
+    user = users_db[session['user_id']]
+    return render_template_string(DASHBOARD_PAGE, user=user)
 
 @app.route('/api/loans')
 @login_required
-def get_user_loans():
-    loans = Loan.query.filter_by(user_id=session['user_id']).all()
-    return jsonify([{
-        'id': loan.id,
-        'item_name': loan.item.name,
-        'loan_amount': loan.loan_amount,
-        'amount_due': loan.amount_due,
-        'status': loan.status,
-        'due_date': loan.due_date.strftime('%Y-%m-%d'),
-        'days_until_due': (loan.due_date - datetime.utcnow()).days
-    } for loan in loans])
+def api_loans():
+    uid = session['user_id']
+    result = []
+    for lid, loan in loans_db.items():
+        if loan['user'] == uid:
+            item = items_db.get(loan['item'], {})
+            due = datetime.fromisoformat(loan['due'])
+            days_left = (due - datetime.utcnow()).days
+            result.append({
+                'id': lid,
+                'item': item.get('name', 'Unknown'),
+                'amount': loan['amount'],
+                'total_due': loan['total_due'],
+                'status': loan['status'],
+                'due': due.strftime('%Y-%m-%d'),
+                'days_left': days_left
+            })
+    return jsonify(result)
 
-@app.route('/api/repay-loan/<int:loan_id>', methods=['POST'])
+@app.route('/api/repay/<lid>', methods=['POST'])
 @login_required
-def repay_loan(loan_id):
-    loan = Loan.query.get(loan_id)
-    if not loan or loan.user_id != session['user_id']:
-        return jsonify({'error': 'Loan not found'}), 404
+def api_repay(lid):
+    if lid not in loans_db:
+        return jsonify({'error': 'Not found'}), 404
     
-    loan.status = 'repaid'
-    loan.item.status = 'available'
-    db.session.commit()
+    loan = loans_db[lid]
+    if loan['user'] != session['user_id']:
+        return jsonify({'error': 'Unauthorized'}), 403
     
-    return jsonify({'success': True, 'message': 'Loan repaid successfully'}), 200
-
-# ============ ADMIN ROUTES ============
+    loan['status'] = 'repaid'
+    items_db[loan['item']]['status'] = 'available'
+    
+    return jsonify({'success': True}), 200
 
 @app.route('/admin')
 @admin_required
-def admin_dashboard():
-    with app.app_context():
-        total_items = Item.query.count()
-        available_items = Item.query.filter_by(status='available').count()
-        active_loans = Loan.query.filter_by(status='active').count()
-        total_users = User.query.count()
-    
-    return render_template_string(ADMIN_TEMPLATE, 
-        total_items=total_items,
-        available_items=available_items,
-        active_loans=active_loans,
-        total_users=total_users
+def admin():
+    return render_template_string(ADMIN_PAGE, 
+        total_items=len(items_db),
+        available=sum(1 for i in items_db.values() if i['status'] == 'available'),
+        active_loans=sum(1 for l in loans_db.values() if l['status'] == 'active'),
+        total_users=len(users_db)
     )
 
-@app.route('/admin/add-item', methods=['POST'])
+@app.route('/api/admin/add-item', methods=['POST'])
 @admin_required
-def add_item():
+def api_add_item():
     data = request.get_json()
-    
-    item = Item(
-        name=data.get('name'),
-        category=data.get('category'),
-        description=data.get('description'),
-        pawn_value=float(data.get('pawn_value')),
-        loan_duration_days=int(data.get('loan_duration_days', 30)),
-        interest_rate=float(data.get('interest_rate', 15.0)),
-        image_url=data.get('image_url', '/static/placeholder.png')
-    )
-    
-    db.session.add(item)
-    db.session.commit()
-    
-    return jsonify({'success': True, 'item_id': item.id}), 201
+    iid = gen_id()
+    items_db[iid] = {
+        'id': iid,
+        'name': data.get('name'),
+        'category': data.get('category'),
+        'desc': data.get('desc'),
+        'value': float(data.get('value')),
+        'rate': float(data.get('rate', 15)),
+        'days': int(data.get('days', 30)),
+        'status': 'available',
+        'created': datetime.utcnow().isoformat()
+    }
+    return jsonify({'success': True, 'id': iid}), 201
 
-@app.route('/admin/items')
+@app.route('/api/admin/delete-item/<iid>', methods=['DELETE'])
 @admin_required
-def admin_items():
-    items = Item.query.all()
-    return render_template_string(ADMIN_ITEMS_TEMPLATE, items=items)
-
-@app.route('/admin/loans')
-@admin_required
-def admin_loans():
-    loans = Loan.query.all()
-    return render_template_string(ADMIN_LOANS_TEMPLATE, loans=loans)
-
-@app.route('/admin/delete-item/<int:item_id>', methods=['DELETE'])
-@admin_required
-def delete_item(item_id):
-    item = Item.query.get(item_id)
-    if item:
-        db.session.delete(item)
-        db.session.commit()
+def api_delete_item(iid):
+    if iid in items_db:
+        del items_db[iid]
         return jsonify({'success': True}), 200
-    return jsonify({'error': 'Item not found'}), 404
+    return jsonify({'error': 'Not found'}), 404
+
+@app.route('/api/admin/items')
+@admin_required
+def api_admin_items():
+    result = []
+    for iid, item in items_db.items():
+        result.append({
+            'id': iid,
+            'name': item['name'],
+            'cat': item['category'],
+            'val': item['value'],
+            'status': item['status']
+        })
+    return jsonify(result)
 
 # ============ TEMPLATES ============
 
-AUTH_TEMPLATE = '''
+HOME = '''
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pawn Shop - Auth</title>
+    <title>Pawn Shop</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #1a1a1a; color: #fff; }
-        .container { max-width: 450px; margin: 40px auto; padding: 30px; background: #2a2a2a; border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
-        h1 { text-align: center; margin-bottom: 30px; color: #ffc107; font-size: 28px; }
-        .form-group { margin-bottom: 18px; }
-        label { display: block; margin-bottom: 6px; font-weight: 500; font-size: 14px; }
-        input, select { width: 100%; padding: 11px; border: 1px solid #444; border-radius: 5px; background: #333; color: #fff; font-size: 14px; }
-        input:focus, select:focus { outline: none; border-color: #ffc107; background: #3a3a3a; }
-        .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-        .row .form-group { margin-bottom: 0; }
-        button { width: 100%; padding: 12px; background: #ffc107; color: #000; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; transition: all 0.3s; font-size: 16px; }
-        button:hover { background: #ffb600; transform: translateY(-2px); }
-        .toggle { text-align: center; margin-top: 20px; }
-        .toggle a { color: #ffc107; text-decoration: none; cursor: pointer; }
-        .error { color: #ff6b6b; text-align: center; margin: 10px 0; font-size: 13px; }
-        .success { color: #51cf66; text-align: center; margin: 10px 0; font-size: 13px; }
-        #profilePreview { width: 80px; height: 80px; margin: 10px auto; border-radius: 8px; background: #1a1a1a; display: flex; align-items: center; justify-content: center; font-size: 40px; border: 2px solid #ffc107; overflow: hidden; }
-        #profilePreview img { width: 100%; height: 100%; object-fit: cover; }
-        .file-input-label { display: block; padding: 10px; background: #1a1a1a; border: 1px dashed #ffc107; border-radius: 5px; text-align: center; cursor: pointer; font-size: 13px; transition: all 0.3s; }
-        .file-input-label:hover { background: #262626; }
-        #fileInput { display: none; }
-        .home-link { text-align: center; margin-top: 15px; }
-        .home-link a { color: #ffc107; text-decoration: none; }
+        body { font-family: Arial, sans-serif; background: #0a0a0a; color: #fff; }
+        nav { background: #1a1a1a; padding: 20px 30px; display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid #ffc107; }
+        nav h1 { font-size: 28px; color: #ffc107; }
+        nav a { color: #fff; text-decoration: none; margin-left: 25px; padding: 8px 16px; border-radius: 5px; transition: 0.3s; }
+        nav a:hover { background: #ffc107; color: #000; }
+        .hero { text-align: center; padding: 120px 20px; background: linear-gradient(135deg, #1a1a1a, #2a2a2a); }
+        .hero h1 { font-size: 52px; margin-bottom: 15px; color: #ffc107; }
+        .hero p { font-size: 20px; color: #ccc; margin-bottom: 35px; }
+        .cta { display: inline-block; padding: 16px 45px; background: #ffc107; color: #000; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 18px; transition: 0.3s; }
+        .cta:hover { background: #ffb600; transform: scale(1.05); }
+        .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 30px; padding: 80px 30px; max-width: 1200px; margin: 0 auto; }
+        .feature { background: #1a1a1a; padding: 35px; border-radius: 10px; border: 1px solid #333; text-align: center; }
+        .feature h3 { color: #ffc107; margin-bottom: 15px; font-size: 22px; }
+        .feature p { color: #aaa; font-size: 15px; }
+        footer { text-align: center; padding: 25px; background: #1a1a1a; border-top: 2px solid #ffc107; margin-top: 60px; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1 id="title">Login</h1>
-        <div id="message"></div>
-        <form id="authForm">
-            <div id="loginFields">
-                <div class="form-group">
-                    <label>Username</label>
-                    <input type="text" id="username" required>
-                </div>
-                <div class="form-group">
-                    <label>Password</label>
-                    <input type="password" id="password" required>
-                </div>
-            </div>
-
-            <div id="registerFields" style="display: none;">
-                <div class="form-group">
-                    <label>Username</label>
-                    <input type="text" id="username" required>
-                </div>
-                <div class="form-group">
-                    <label>Email</label>
-                    <input type="email" id="email" required>
-                </div>
-                <div class="form-group">
-                    <label>Password</label>
-                    <input type="password" id="password" required>
-                </div>
-                <div class="form-group">
-                    <label>Phone</label>
-                    <input type="tel" id="phone">
-                </div>
-                <div class="row">
-                    <div class="form-group">
-                        <label>Date of Birth</label>
-                        <input type="date" id="date_of_birth">
-                    </div>
-                    <div class="form-group">
-                        <label>Place of Residence</label>
-                        <input type="text" id="place_of_residence" placeholder="City, Country">
-                    </div>
-                </div>
-                <div class="form-group">
-                    <label>Employment Status</label>
-                    <select id="employment_status">
-                        <option value="">Select Status</option>
-                        <option value="employed">Employed</option>
-                        <option value="self-employed">Self-Employed</option>
-                        <option value="unemployed">Unemployed</option>
-                        <option value="student">Student</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>ID Picture / Government Issued ID</label>
-                    <div id="profilePreview">📸</div>
-                    <label for="fileInput" class="file-input-label">Click to upload ID photo</label>
-                    <input type="file" id="fileInput" accept="image/*">
-                </div>
-            </div>
-
-            <button type="submit">Submit</button>
-        </form>
-        <div class="toggle">
-            <span id="toggleText">Don't have an account? </span>
-            <a onclick="toggleMode(event)">Register</a>
+    <nav>
+        <h1>💰 Pawn Shop</h1>
+        <div>
+            <a href="/register">Sign Up</a>
+            <a onclick="window.location.href='#'; document.getElementById('loginform').style.display='flex';" style="cursor:pointer;">Login</a>
         </div>
-        <div class="home-link">
-            <a href="/">← Back Home</a>
+    </nav>
+    <div class="hero">
+        <h1>Quick Pawn Loans</h1>
+        <p>Sell or pawn your items for instant cash</p>
+        <a href="/register" class="cta">Get Started</a>
+    </div>
+    <div class="features">
+        <div class="feature">
+            <h3>⚡ Fast Cash</h3>
+            <p>Get approved in minutes</p>
+        </div>
+        <div class="feature">
+            <h3>🔒 Secure</h3>
+            <p>Your data is protected</p>
+        </div>
+        <div class="feature">
+            <h3>💎 Fair Rates</h3>
+            <p>Competitive interest rates</p>
+        </div>
+        <div class="feature">
+            <h3>📱 Easy</h3>
+            <p>Simple online process</p>
+        </div>
+    </div>
+    <footer><p>&copy; 2024 Pawn Shop. All rights reserved.</p></footer>
+
+    <div id="loginform" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);align-items:center;justify-content:center;z-index:999;">
+        <div style="background:#1a1a1a;padding:35px;border-radius:10px;max-width:450px;width:90%;">
+            <h2 style="color:#ffc107;margin-bottom:20px;">Login</h2>
+            <form onsubmit="submitLogin(event)">
+                <div style="margin-bottom:15px;">
+                    <label style="display:block;margin-bottom:5px;font-weight:bold;">Username</label>
+                    <input type="text" id="luname" required style="width:100%;padding:10px;background:#2a2a2a;color:#fff;border:1px solid #444;border-radius:5px;">
+                </div>
+                <div style="margin-bottom:15px;">
+                    <label style="display:block;margin-bottom:5px;font-weight:bold;">Password</label>
+                    <input type="password" id="lpass" required style="width:100%;padding:10px;background:#2a2a2a;color:#fff;border:1px solid #444;border-radius:5px;">
+                </div>
+                <button type="submit" style="width:100%;padding:12px;background:#ffc107;color:#000;border:none;border-radius:5px;font-weight:bold;cursor:pointer;">Login</button>
+            </form>
+            <p style="margin-top:15px;text-align:center;color:#aaa;">
+                No account? <a href="/register" style="color:#ffc107;text-decoration:none;">Sign up</a>
+            </p>
+            <button onclick="document.getElementById('loginform').style.display='none'" style="margin-top:15px;width:100%;padding:10px;background:#666;color:#fff;border:none;border-radius:5px;cursor:pointer;">Close</button>
         </div>
     </div>
 
     <script>
-        let isLoginMode = true;
+        async function submitLogin(e) {
+            e.preventDefault();
+            const res = await fetch('/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    username: document.getElementById('luname').value,
+                    password: document.getElementById('lpass').value
+                })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                window.location.href = data.is_admin ? '/admin' : '/browse';
+            } else {
+                alert(data.error || 'Login failed');
+            }
+        }
+    </script>
+</body>
+</html>
+'''
 
-        // Handle profile picture upload
-        document.getElementById('fileInput').addEventListener('change', function(e) {
+AUTH_PAGE = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign Up - Pawn Shop</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; background: #0a0a0a; color: #fff; }
+        .container { max-width: 500px; margin: 40px auto; padding: 35px; background: #1a1a1a; border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,0.8); }
+        h1 { text-align: center; margin-bottom: 35px; color: #ffc107; font-size: 26px; }
+        .form-group { margin-bottom: 16px; }
+        label { display: block; margin-bottom: 6px; font-weight: bold; font-size: 13px; }
+        input, select, textarea { width: 100%; padding: 10px; border: 1px solid #444; background: #2a2a2a; color: #fff; border-radius: 5px; font-size: 14px; }
+        input:focus, select:focus, textarea:focus { outline: none; border-color: #ffc107; }
+        .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .row .form-group { margin-bottom: 0; }
+        button { width: 100%; padding: 12px; background: #ffc107; color: #000; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 16px; transition: 0.3s; }
+        button:hover { background: #ffb600; }
+        .error { color: #ff6b6b; text-align: center; margin: 10px 0; font-size: 12px; }
+        .success { color: #51cf66; text-align: center; margin: 10px 0; font-size: 12px; }
+        .proof-preview { width: 100px; height: 100px; margin: 10px auto; border-radius: 5px; background: #2a2a2a; display: flex; align-items: center; justify-content: center; border: 2px solid #ffc107; }
+        .proof-preview img { width: 100%; height: 100%; object-fit: cover; border-radius: 5px; }
+        .file-label { display: block; padding: 10px; background: #2a2a2a; border: 1px dashed #ffc107; border-radius: 5px; text-align: center; cursor: pointer; font-size: 12px; transition: 0.3s; }
+        .file-label:hover { background: #333; }
+        #proofFile { display: none; }
+        .home { text-align: center; margin-top: 15px; }
+        .home a { color: #ffc107; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Create Account</h1>
+        <div id="msg"></div>
+        <form id="form">
+            <div class="form-group">
+                <label>Username</label>
+                <input type="text" id="uname" required>
+            </div>
+            <div class="form-group">
+                <label>Email</label>
+                <input type="email" id="email" required>
+            </div>
+            <div class="form-group">
+                <label>Password</label>
+                <input type="password" id="pass" required>
+            </div>
+            <div class="form-group">
+                <label>Phone</label>
+                <input type="tel" id="phone">
+            </div>
+            <div class="row">
+                <div class="form-group">
+                    <label>Date of Birth</label>
+                    <input type="date" id="dob" required>
+                </div>
+                <div class="form-group">
+                    <label>Employment Status</label>
+                    <select id="emp" required>
+                        <option value="">Select</option>
+                        <option value="employed">Employed</option>
+                        <option value="self-employed">Self-Employed</option>
+                        <option value="unemployed">Unemployed</option>
+                        <option value="student">Student</option>
+                        <option value="retired">Retired</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Proof of Residence (Photo)</label>
+                <div class="proof-preview" id="preview">📄</div>
+                <label for="proofFile" class="file-label">Click to upload proof</label>
+                <input type="file" id="proofFile" accept="image/*">
+            </div>
+            <button type="submit">Create Account</button>
+        </form>
+        <div class="home">
+            <a href="/">← Home</a>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('proofFile').addEventListener('change', function(e) {
             const file = e.target.files[0];
             if (file) {
                 const reader = new FileReader();
-                reader.onload = function(event) {
-                    document.getElementById('profilePreview').innerHTML = `<img src="${event.target.result}" alt="Profile">`;
-                    window.profilePictureBase64 = event.target.result;
+                reader.onload = function(ev) {
+                    document.getElementById('preview').innerHTML = `<img src="${ev.target.result}">`;
+                    window.proofBase64 = ev.target.result;
                 };
                 reader.readAsDataURL(file);
             }
         });
 
-        document.getElementById('authForm').addEventListener('submit', async (e) => {
+        document.getElementById('form').addEventListener('submit', async (e) => {
             e.preventDefault();
-            const username = document.getElementById('username').value;
-            const password = document.getElementById('password').value;
-            const url = isLoginMode ? '/login' : '/register';
             
-            const body = { username, password };
-            
-            if (!isLoginMode) {
-                body.email = document.getElementById('email').value;
-                body.phone = document.getElementById('phone').value;
-                body.date_of_birth = document.getElementById('date_of_birth').value;
-                body.place_of_residence = document.getElementById('place_of_residence').value;
-                body.employment_status = document.getElementById('employment_status').value;
-                body.profile_picture = window.profilePictureBase64 || '';
+            if (!window.proofBase64) {
+                show('error', 'Please upload proof of residence');
+                return;
             }
 
+            const body = {
+                username: document.getElementById('uname').value,
+                email: document.getElementById('email').value,
+                password: document.getElementById('pass').value,
+                phone: document.getElementById('phone').value,
+                dob: document.getElementById('dob').value,
+                employment: document.getElementById('emp').value,
+                residence_proof: window.proofBase64
+            };
+
             try {
-                const res = await fetch(url, {
+                const res = await fetch('/register', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body)
@@ -463,136 +486,53 @@ AUTH_TEMPLATE = '''
                 const data = await res.json();
                 
                 if (res.ok) {
-                    if (isLoginMode) {
-                        window.location.href = data.is_admin ? '/admin' : '/browse';
-                    } else {
-                        showMessage('success', data.message || 'Account created! Logging in...');
-                        setTimeout(() => window.location.href = '/login', 1500);
-                    }
+                    show('success', 'Account created! Redirecting to login...');
+                    setTimeout(() => window.location.href = '/', 1500);
                 } else {
-                    showMessage('error', data.error || 'Error');
+                    show('error', data.error || 'Error');
                 }
             } catch (err) {
-                showMessage('error', 'Request failed');
+                show('error', 'Connection failed');
             }
         });
 
-        function toggleMode(e) {
-            e.preventDefault();
-            isLoginMode = !isLoginMode;
-            document.getElementById('title').textContent = isLoginMode ? 'Login' : 'Register';
-            document.getElementById('loginFields').style.display = isLoginMode ? 'block' : 'none';
-            document.getElementById('registerFields').style.display = isLoginMode ? 'none' : 'block';
-            document.getElementById('toggleText').textContent = isLoginMode ? "Don't have an account? " : 'Already have an account? ';
-            document.querySelector('.toggle a').textContent = isLoginMode ? 'Register' : 'Login';
-            document.getElementById('message').innerHTML = '';
-        }
-
-        function showMessage(type, msg) {
-            document.getElementById('message').innerHTML = `<div class="${type}">${msg}</div>`;
+        function show(type, text) {
+            document.getElementById('msg').innerHTML = `<div class="${type}">${text}</div>`;
         }
     </script>
 </body>
 </html>
 '''
 
-HOME_TEMPLATE = '''
+BROWSE_PAGE = '''
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Online Pawn Shop</title>
+    <title>Browse - Pawn Shop</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f0f0f; color: #fff; }
-        nav { background: #1a1a1a; padding: 15px 30px; display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #ffc107; }
-        nav h1 { color: #ffc107; font-size: 24px; }
-        nav a { color: #fff; text-decoration: none; margin-left: 20px; padding: 8px 15px; border-radius: 5px; transition: all 0.3s; }
-        nav a:hover { background: #ffc107; color: #000; }
-        .hero { text-align: center; padding: 100px 20px; background: linear-gradient(135deg, #1a1a1a 0%, #2a2a2a 100%); }
-        .hero h1 { font-size: 48px; margin-bottom: 20px; color: #ffc107; }
-        .hero p { font-size: 18px; margin-bottom: 30px; color: #ccc; }
-        .cta { display: inline-block; padding: 15px 40px; background: #ffc107; color: #000; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 16px; transition: all 0.3s; }
-        .cta:hover { background: #ffb600; transform: translateY(-2px); }
-        .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 30px; padding: 60px 30px; max-width: 1200px; margin: 0 auto; }
-        .feature { background: #1a1a1a; padding: 30px; border-radius: 10px; text-align: center; border: 1px solid #333; }
-        .feature h3 { color: #ffc107; margin-bottom: 15px; font-size: 20px; }
-        .feature p { color: #aaa; }
-        footer { background: #1a1a1a; padding: 20px; text-align: center; border-top: 2px solid #ffc107; margin-top: 60px; }
-    </style>
-</head>
-<body>
-    <nav>
-        <h1>💰 Pawn Shop</h1>
-        <div>
-            <a href="/register">Register</a>
-            <a href="/login">Login</a>
-        </div>
-    </nav>
-
-    <div class="hero">
-        <h1>Welcome to Online Pawn Shop</h1>
-        <p>Quick loans with valuable items. Easy process, fair rates.</p>
-        <a href="/browse" class="cta">Browse Items Now</a>
-    </div>
-
-    <div class="features">
-        <div class="feature">
-            <h3>⚡ Fast Loans</h3>
-            <p>Get instant cash loans against your items in minutes</p>
-        </div>
-        <div class="feature">
-            <h3>💎 Secure</h3>
-            <p>Your items are safely stored and insured</p>
-        </div>
-        <div class="feature">
-            <h3>📱 Easy Process</h3>
-            <p>Simple online application and quick approval</p>
-        </div>
-        <div class="feature">
-            <h3>🔄 Flexible Terms</h3>
-            <p>30-day loan periods with competitive interest rates</p>
-        </div>
-    </div>
-
-    <footer>
-        <p>&copy; 2024 Online Pawn Shop. All rights reserved.</p>
-    </footer>
-</body>
-</html>
-'''
-
-BROWSE_TEMPLATE = '''
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Browse Items - Pawn Shop</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f0f0f; color: #fff; }
-        nav { background: #1a1a1a; padding: 15px 30px; display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #ffc107; }
+        body { font-family: Arial, sans-serif; background: #0a0a0a; color: #fff; }
+        nav { background: #1a1a1a; padding: 15px 30px; display: flex; justify-content: space-between; border-bottom: 2px solid #ffc107; }
         nav h1 { color: #ffc107; }
         nav a { color: #fff; text-decoration: none; margin-left: 20px; }
         .container { max-width: 1200px; margin: 0 auto; padding: 30px 20px; }
-        .filters { margin-bottom: 30px; }
-        .filters select { padding: 10px 15px; background: #1a1a1a; color: #fff; border: 1px solid #ffc107; border-radius: 5px; cursor: pointer; }
-        .items-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 25px; }
-        .item-card { background: #1a1a1a; border-radius: 10px; overflow: hidden; border: 1px solid #333; transition: all 0.3s; }
-        .item-card:hover { border-color: #ffc107; transform: translateY(-5px); }
-        .item-image { width: 100%; height: 200px; background: #2a2a2a; display: flex; align-items: center; justify-content: center; font-size: 40px; }
-        .item-info { padding: 20px; }
-        .item-name { font-size: 18px; font-weight: bold; margin-bottom: 8px; color: #ffc107; }
-        .item-category { color: #aaa; font-size: 12px; margin-bottom: 10px; }
-        .item-description { color: #ccc; font-size: 14px; margin-bottom: 15px; line-height: 1.4; }
-        .item-price { font-size: 20px; font-weight: bold; color: #51cf66; margin-bottom: 10px; }
-        .item-terms { color: #999; font-size: 12px; margin-bottom: 15px; }
-        .btn { padding: 10px 20px; background: #ffc107; color: #000; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; transition: all 0.3s; width: 100%; }
+        .filter { margin-bottom: 25px; }
+        .filter select { padding: 10px 15px; background: #1a1a1a; color: #fff; border: 1px solid #ffc107; border-radius: 5px; cursor: pointer; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 20px; }
+        .card { background: #1a1a1a; border-radius: 8px; overflow: hidden; border: 1px solid #333; transition: 0.3s; }
+        .card:hover { border-color: #ffc107; transform: translateY(-5px); }
+        .card-img { width: 100%; height: 180px; background: #2a2a2a; display: flex; align-items: center; justify-content: center; font-size: 50px; }
+        .card-body { padding: 18px; }
+        .card-title { font-size: 16px; font-weight: bold; color: #ffc107; margin-bottom: 6px; }
+        .card-cat { color: #999; font-size: 12px; margin-bottom: 8px; }
+        .card-desc { color: #ccc; font-size: 13px; margin-bottom: 12px; }
+        .card-price { font-size: 18px; font-weight: bold; color: #51cf66; margin-bottom: 8px; }
+        .card-terms { color: #888; font-size: 11px; margin-bottom: 12px; }
+        .btn { width: 100%; padding: 10px; background: #ffc107; color: #000; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; transition: 0.3s; }
         .btn:hover { background: #ffb600; }
-        .btn:disabled { background: #666; cursor: not-allowed; }
-        .empty { text-align: center; padding: 50px 20px; color: #aaa; }
+        .empty { text-align: center; padding: 50px 20px; color: #888; }
     </style>
 </head>
 <body>
@@ -603,565 +543,398 @@ BROWSE_TEMPLATE = '''
             <a href="/logout">Logout</a>
         </div>
     </nav>
-
     <div class="container">
-        <h2 style="margin-bottom: 20px;">Browse Available Items</h2>
-        
-        <div class="filters">
+        <h2 style="margin-bottom: 20px;">Available Items</h2>
+        <div class="filter">
             <label>Category: </label>
-            <select id="categoryFilter" onchange="filterItems()">
-                <option value="">All Categories</option>
+            <select onchange="load(this.value)">
+                <option value="">All</option>
                 <option value="Electronics">Electronics</option>
                 <option value="Jewelry">Jewelry</option>
                 <option value="Tools">Tools</option>
-                <option value="Sports">Sports Equipment</option>
+                <option value="Sports">Sports</option>
                 <option value="Furniture">Furniture</option>
-                <option value="Other">Other</option>
             </select>
         </div>
-
-        <div class="items-grid" id="itemsGrid">
-            <!-- Items loaded here -->
-        </div>
+        <div class="grid" id="grid"></div>
     </div>
 
     <script>
-        async function loadItems(category = '') {
-            try {
-                const url = category ? `/api/items?category=${category}` : '/api/items';
-                const res = await fetch(url);
-                const items = await res.json();
-                
-                const grid = document.getElementById('itemsGrid');
-                if (items.length === 0) {
-                    grid.innerHTML = '<div class="empty" style="grid-column: 1/-1;">No items available</div>';
-                    return;
-                }
+        async function load(cat = '') {
+            const url = cat ? `/api/items?cat=${cat}` : '/api/items';
+            const res = await fetch(url);
+            const items = await res.json();
+            const grid = document.getElementById('grid');
+            
+            if (!items.length) {
+                grid.innerHTML = '<div class="empty" style="grid-column: 1/-1;">No items</div>';
+                return;
+            }
 
-                grid.innerHTML = items.map(item => `
-                    <div class="item-card">
-                        <div class="item-image">${getEmoji(item.category)}</div>
-                        <div class="item-info">
-                            <div class="item-name">${item.name}</div>
-                            <div class="item-category">${item.category}</div>
-                            <div class="item-description">${item.description || 'N/A'}</div>
-                            <div class="item-price">$${item.pawn_value.toFixed(2)}</div>
-                            <div class="item-terms">${item.loan_duration_days} days • ${item.interest_rate}% interest</div>
-                            <button class="btn" onclick="pawnItem(${item.id})">Pawn This Item</button>
-                        </div>
+            grid.innerHTML = items.map(i => `
+                <div class="card">
+                    <div class="card-img">${getEmoji(i.category)}</div>
+                    <div class="card-body">
+                        <div class="card-title">${i.name}</div>
+                        <div class="card-cat">${i.category}</div>
+                        <div class="card-desc">${i.desc || 'N/A'}</div>
+                        <div class="card-price">$${i.value.toFixed(2)}</div>
+                        <div class="card-terms">${i.days} days • ${i.rate}% APR</div>
+                        <button class="btn" onclick="pawn('${i.id}')">Pawn</button>
                     </div>
-                `).join('');
-            } catch (err) {
-                document.getElementById('itemsGrid').innerHTML = '<div class="empty" style="grid-column: 1/-1;">Error loading items</div>';
+                </div>
+            `).join('');
+        }
+
+        function getEmoji(cat) {
+            const map = { 'Electronics': '📱', 'Jewelry': '💍', 'Tools': '🔧', 'Sports': '⚽', 'Furniture': '🛋️' };
+            return map[cat] || '📦';
+        }
+
+        async function pawn(id) {
+            const res = await fetch('/api/pawn', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ iid: id })
+            });
+            const data = await res.json();
+            
+            if (res.ok) {
+                alert(`Loan Approved!\nAmount: $${data.amount.toFixed(2)}\nTotal Due: $${data.total_due.toFixed(2)}\nDue: ${data.due_date}`);
+                load();
+            } else {
+                alert(data.error || 'Error');
             }
         }
 
-        function getEmoji(category) {
-            const emojis = {
-                'Electronics': '📱',
-                'Jewelry': '💍',
-                'Tools': '🔧',
-                'Sports': '⚽',
-                'Furniture': '🛋️',
-                'Other': '📦'
-            };
-            return emojis[category] || '📦';
-        }
-
-        async function pawnItem(itemId) {
-            try {
-                const res = await fetch('/api/pawn', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ item_id: itemId })
-                });
-                const data = await res.json();
-                
-                if (res.ok) {
-                    alert(`Loan approved!\nAmount: $${data.loan_amount.toFixed(2)}\nDue: ${data.due_date}`);
-                    loadItems();
-                } else {
-                    alert(data.error || 'Error pawning item');
-                }
-            } catch (err) {
-                alert('Error processing loan');
-            }
-        }
-
-        function filterItems() {
-            const category = document.getElementById('categoryFilter').value;
-            loadItems(category);
-        }
-
-        loadItems();
+        load();
     </script>
 </body>
 </html>
 '''
 
-DASHBOARD_TEMPLATE = '''
+DASHBOARD_PAGE = '''
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>My Dashboard - Pawn Shop</title>
+    <title>Dashboard - Pawn Shop</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f0f0f; color: #fff; }
-        nav { background: #1a1a1a; padding: 15px 30px; display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #ffc107; }
+        body { font-family: Arial, sans-serif; background: #0a0a0a; color: #fff; }
+        nav { background: #1a1a1a; padding: 15px 30px; display: flex; justify-content: space-between; border-bottom: 2px solid #ffc107; }
         nav h1 { color: #ffc107; }
         nav a { color: #fff; text-decoration: none; margin-left: 20px; }
         .container { max-width: 1000px; margin: 0 auto; padding: 30px 20px; }
         .profile { background: #1a1a1a; padding: 25px; border-radius: 10px; margin-bottom: 30px; border: 1px solid #333; }
-        .profile-header { display: flex; gap: 30px; align-items: flex-start; }
-        .profile-pic { width: 150px; height: 150px; background: #2a2a2a; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 60px; border: 2px solid #ffc107; overflow: hidden; }
+        .profile-pic { width: 140px; height: 140px; background: #2a2a2a; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 50px; border: 2px solid #ffc107; margin-bottom: 15px; overflow: hidden; }
         .profile-pic img { width: 100%; height: 100%; object-fit: cover; }
-        .profile-info { flex: 1; }
-        .profile h2 { color: #ffc107; margin-bottom: 15px; }
-        .profile-row { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 10px; }
+        .profile h2 { color: #ffc107; margin-bottom: 15px; font-size: 24px; }
         .profile p { color: #ccc; margin-bottom: 8px; font-size: 14px; }
         .profile strong { color: #ffc107; }
-        .loans-section { background: #1a1a1a; padding: 25px; border-radius: 10px; border: 1px solid #333; }
-        .loans-section h2 { color: #ffc107; margin-bottom: 20px; }
-        .loan-card { background: #2a2a2a; padding: 20px; border-radius: 8px; margin-bottom: 15px; border-left: 4px solid #ffc107; }
-        .loan-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
-        .loan-name { font-size: 18px; font-weight: bold; }
-        .loan-status { padding: 5px 10px; border-radius: 3px; font-size: 12px; }
+        .loans { background: #1a1a1a; padding: 25px; border-radius: 10px; border: 1px solid #333; }
+        .loans h2 { color: #ffc107; margin-bottom: 20px; }
+        .loan { background: #2a2a2a; padding: 20px; border-radius: 8px; margin-bottom: 15px; border-left: 4px solid #ffc107; }
+        .loan-head { display: flex; justify-content: space-between; margin-bottom: 15px; }
+        .loan-title { font-weight: bold; font-size: 16px; }
+        .status { padding: 4px 10px; border-radius: 3px; font-size: 11px; }
         .status-active { background: #51cf66; color: #000; }
         .status-repaid { background: #94d82d; color: #000; }
-        .status-forfeited { background: #ff6b6b; color: #fff; }
-        .loan-details { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px; font-size: 14px; color: #aaa; }
-        .loan-detail { display: flex; justify-content: space-between; }
-        .loan-detail-value { color: #fff; }
-        .repay-btn { padding: 10px 20px; background: #51cf66; color: #000; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
-        .repay-btn:hover { background: #40c057; }
-        .repay-btn:disabled { background: #666; cursor: not-allowed; }
-        .empty { text-align: center; padding: 40px 20px; color: #aaa; }
+        .loan-info { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; font-size: 13px; color: #aaa; margin-bottom: 15px; }
+        .loan-info div { display: flex; justify-content: space-between; }
+        .info-val { color: #fff; }
+        .repay { padding: 10px 20px; background: #51cf66; color: #000; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
+        .repay:hover { background: #40c057; }
+        .empty { text-align: center; padding: 40px 20px; color: #888; }
     </style>
 </head>
 <body>
     <nav>
         <h1>💰 Pawn Shop</h1>
         <div>
-            <a href="/browse">Browse Items</a>
+            <a href="/browse">Browse</a>
             <a href="/logout">Logout</a>
         </div>
     </nav>
-
     <div class="container">
         <div class="profile">
-            <div class="profile-header">
-                <div class="profile-pic" id="profilePicContainer">👤</div>
-                <div class="profile-info">
-                    <h2 id="username">{{ user.username }}</h2>
-                    <div class="profile-row">
-                        <p><strong>Email:</strong> {{ user.email }}</p>
-                        <p><strong>Phone:</strong> {{ user.phone or 'Not provided' }}</p>
-                    </div>
-                    <div class="profile-row">
-                        <p><strong>Date of Birth:</strong> <span id="dob">{{ user.date_of_birth or 'Not provided' }}</span></p>
-                        <p><strong>Residence:</strong> <span id="residence">{{ user.place_of_residence or 'Not provided' }}</span></p>
-                    </div>
-                    <div class="profile-row">
-                        <p><strong>Employment Status:</strong> <span id="employment">{{ user.employment_status or 'Not provided' }}</span></p>
-                    </div>
-                </div>
-            </div>
+            <div class="profile-pic" id="pic">👤</div>
+            <h2>{{ user.username }}</h2>
+            <p><strong>Email:</strong> {{ user.email }}</p>
+            <p><strong>Phone:</strong> {{ user.phone or 'N/A' }}</p>
+            <p><strong>DOB:</strong> {{ user.dob or 'N/A' }}</p>
+            <p><strong>Employment:</strong> {{ user.employment or 'N/A' }}</p>
         </div>
-
-        <div class="loans-section">
+        <div class="loans">
             <h2>My Loans</h2>
-            <div id="loansContainer">
-                <!-- Loans loaded here -->
-            </div>
+            <div id="loans"></div>
         </div>
     </div>
 
     <script>
-        // Load profile picture if exists
-        const profilePic = '{{ user.profile_picture or "" }}';
-        if (profilePic) {
-            document.getElementById('profilePicContainer').innerHTML = `<img src="${profilePic}" alt="Profile">`;
+        const pic = '{{ user.residence_proof or "" }}';
+        if (pic && pic.length > 100) {
+            document.getElementById('pic').innerHTML = `<img src="${pic}">`;
         }
 
-        async function loadLoans() {
-            try {
-                const res = await fetch('/api/loans');
-                const loans = await res.json();
-                
-                const container = document.getElementById('loansContainer');
-                if (loans.length === 0) {
-                    container.innerHTML = '<div class="empty">No active loans</div>';
-                    return;
-                }
-
-                container.innerHTML = loans.map(loan => `
-                    <div class="loan-card">
-                        <div class="loan-header">
-                            <div class="loan-name">${loan.item_name}</div>
-                            <span class="loan-status status-${loan.status}">${loan.status.toUpperCase()}</span>
-                        </div>
-                        <div class="loan-details">
-                            <div class="loan-detail">
-                                <span>Loan Amount</span>
-                                <span class="loan-detail-value">$${loan.loan_amount.toFixed(2)}</span>
-                            </div>
-                            <div class="loan-detail">
-                                <span>Amount Due</span>
-                                <span class="loan-detail-value">$${loan.amount_due.toFixed(2)}</span>
-                            </div>
-                            <div class="loan-detail">
-                                <span>Due Date</span>
-                                <span class="loan-detail-value">${loan.due_date}</span>
-                            </div>
-                            <div class="loan-detail">
-                                <span>Days Until Due</span>
-                                <span class="loan-detail-value">${loan.days_until_due}</span>
-                            </div>
-                        </div>
-                        ${loan.status === 'active' ? `
-                            <button class="repay-btn" onclick="repayLoan(${loan.id})">Repay Loan</button>
-                        ` : ''}
-                    </div>
-                `).join('');
-            } catch (err) {
-                document.getElementById('loansContainer').innerHTML = '<div class="empty">Error loading loans</div>';
-            }
-        }
-
-        async function repayLoan(loanId) {
-            if (!confirm('Confirm repayment of this loan?')) return;
+        async function load() {
+            const res = await fetch('/api/loans');
+            const loans = await res.json();
+            const div = document.getElementById('loans');
             
-            try {
-                const res = await fetch(`/api/repay-loan/${loanId}`, { method: 'POST' });
-                const data = await res.json();
-                
-                if (res.ok) {
-                    alert(data.message);
-                    loadLoans();
-                } else {
-                    alert(data.error || 'Error repaying loan');
-                }
-            } catch (err) {
-                alert('Error processing repayment');
+            if (!loans.length) {
+                div.innerHTML = '<div class="empty">No loans</div>';
+                return;
+            }
+
+            div.innerHTML = loans.map(l => `
+                <div class="loan">
+                    <div class="loan-head">
+                        <span class="loan-title">${l.item}</span>
+                        <span class="status status-${l.status}">${l.status.toUpperCase()}</span>
+                    </div>
+                    <div class="loan-info">
+                        <div>
+                            <span>Loan Amount</span>
+                            <span class="info-val">$${l.amount.toFixed(2)}</span>
+                        </div>
+                        <div>
+                            <span>Total Due</span>
+                            <span class="info-val">$${l.total_due.toFixed(2)}</span>
+                        </div>
+                        <div>
+                            <span>Due Date</span>
+                            <span class="info-val">${l.due}</span>
+                        </div>
+                        <div>
+                            <span>Days Left</span>
+                            <span class="info-val">${l.days_left}</span>
+                        </div>
+                    </div>
+                    ${l.status === 'active' ? `<button class="repay" onclick="repay('${l.id}')">Repay</button>` : ''}
+                </div>
+            `).join('');
+        }
+
+        async function repay(id) {
+            if (!confirm('Repay this loan?')) return;
+            const res = await fetch(`/api/repay/${id}`, { method: 'POST' });
+            if (res.ok) {
+                alert('Loan repaid!');
+                load();
             }
         }
 
-        loadLoans();
+        load();
     </script>
 </body>
 </html>
 '''
 
-ADMIN_TEMPLATE = '''
+ADMIN_PAGE = '''
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Dashboard - Pawn Shop</title>
+    <title>Admin - Pawn Shop</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f0f0f; color: #fff; }
-        nav { background: #1a1a1a; padding: 15px 30px; display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #ffc107; }
+        body { font-family: Arial, sans-serif; background: #0a0a0a; color: #fff; }
+        nav { background: #1a1a1a; padding: 15px 30px; display: flex; justify-content: space-between; border-bottom: 2px solid #ffc107; }
         nav h1 { color: #ffc107; }
         nav a { color: #fff; text-decoration: none; margin-left: 20px; }
         .container { max-width: 1200px; margin: 0 auto; padding: 30px 20px; }
         .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }
-        .stat-card { background: #1a1a1a; padding: 25px; border-radius: 10px; border: 1px solid #333; text-align: center; }
-        .stat-value { font-size: 32px; font-weight: bold; color: #ffc107; margin-bottom: 10px; }
-        .stat-label { color: #aaa; }
+        .stat { background: #1a1a1a; padding: 25px; border-radius: 10px; border: 1px solid #333; text-align: center; }
+        .stat-num { font-size: 32px; font-weight: bold; color: #ffc107; margin-bottom: 10px; }
+        .stat-label { color: #999; }
         .tabs { display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 2px solid #333; }
-        .tab-btn { padding: 12px 20px; background: none; color: #aaa; border: none; cursor: pointer; font-size: 16px; border-bottom: 3px solid transparent; transition: all 0.3s; }
-        .tab-btn.active { color: #ffc107; border-bottom-color: #ffc107; }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
+        .tab { padding: 12px 20px; background: none; color: #999; border: none; cursor: pointer; border-bottom: 3px solid transparent; transition: 0.3s; }
+        .tab.active { color: #ffc107; border-bottom-color: #ffc107; }
+        .content { display: none; }
+        .content.active { display: block; }
         .form-group { margin-bottom: 15px; }
-        label { display: block; margin-bottom: 5px; font-weight: 500; }
-        input, select, textarea { width: 100%; padding: 10px; background: #1a1a1a; color: #fff; border: 1px solid #333; border-radius: 5px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input, select, textarea { width: 100%; padding: 10px; background: #2a2a2a; color: #fff; border: 1px solid #444; border-radius: 5px; }
         input:focus, select:focus, textarea:focus { outline: none; border-color: #ffc107; }
-        button { padding: 12px 20px; background: #ffc107; color: #000; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
+        button { padding: 10px 20px; background: #ffc107; color: #000; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
         button:hover { background: #ffb600; }
-        .table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-        .table th { background: #1a1a1a; padding: 15px; text-align: left; border-bottom: 2px solid #ffc107; }
-        .table td { padding: 15px; border-bottom: 1px solid #333; }
-        .table tr:hover { background: #1a1a1a; }
-        .delete-btn { padding: 5px 10px; background: #ff6b6b; color: #fff; border: none; border-radius: 3px; cursor: pointer; }
-        .delete-btn:hover { background: #ff5252; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        table th { background: #2a2a2a; padding: 12px; text-align: left; border-bottom: 2px solid #ffc107; }
+        table td { padding: 12px; border-bottom: 1px solid #333; }
+        .del { background: #ff6b6b; color: #fff; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer; }
     </style>
 </head>
 <body>
     <nav>
-        <h1>💰 Admin Dashboard</h1>
-        <div>
-            <a href="/logout">Logout</a>
-        </div>
+        <h1>Admin</h1>
+        <a href="/logout">Logout</a>
     </nav>
-
     <div class="container">
-        <h2 style="margin-bottom: 25px;">Admin Control Panel</h2>
-
+        <h2 style="margin-bottom: 20px;">Dashboard</h2>
         <div class="stats">
-            <div class="stat-card">
-                <div class="stat-value">{{ total_items }}</div>
+            <div class="stat">
+                <div class="stat-num">{{ total_items }}</div>
                 <div class="stat-label">Total Items</div>
             </div>
-            <div class="stat-card">
-                <div class="stat-value">{{ available_items }}</div>
+            <div class="stat">
+                <div class="stat-num">{{ available }}</div>
                 <div class="stat-label">Available</div>
             </div>
-            <div class="stat-card">
-                <div class="stat-value">{{ active_loans }}</div>
+            <div class="stat">
+                <div class="stat-num">{{ active_loans }}</div>
                 <div class="stat-label">Active Loans</div>
             </div>
-            <div class="stat-card">
-                <div class="stat-value">{{ total_users }}</div>
+            <div class="stat">
+                <div class="stat-num">{{ total_users }}</div>
                 <div class="stat-label">Users</div>
             </div>
         </div>
-
         <div class="tabs">
-            <button class="tab-btn active" onclick="switchTab('add-item')">Add Item</button>
-            <button class="tab-btn" onclick="switchTab('items')">Manage Items</button>
-            <button class="tab-btn" onclick="switchTab('loans')">Loans</button>
+            <button class="tab active" onclick="switchtab('add')">Add Item</button>
+            <button class="tab" onclick="switchtab('items')">Items</button>
         </div>
-
-        <div id="add-item" class="tab-content active">
-            <form onsubmit="addItem(event)">
+        <div id="add" class="content active">
+            <form onsubmit="additem(event)">
                 <h3 style="margin-bottom: 20px;">Add New Item</h3>
                 <div class="form-group">
-                    <label>Item Name</label>
-                    <input type="text" id="itemName" required>
+                    <label>Name</label>
+                    <input type="text" id="name" required>
                 </div>
                 <div class="form-group">
                     <label>Category</label>
-                    <select id="itemCategory" required>
-                        <option value="">Select Category</option>
+                    <select id="cat" required>
+                        <option value="">Select</option>
                         <option value="Electronics">Electronics</option>
                         <option value="Jewelry">Jewelry</option>
                         <option value="Tools">Tools</option>
-                        <option value="Sports">Sports Equipment</option>
+                        <option value="Sports">Sports</option>
                         <option value="Furniture">Furniture</option>
-                        <option value="Other">Other</option>
                     </select>
                 </div>
                 <div class="form-group">
                     <label>Description</label>
-                    <textarea id="itemDescription" rows="4"></textarea>
+                    <textarea id="desc" rows="3"></textarea>
                 </div>
                 <div class="form-group">
                     <label>Pawn Value ($)</label>
-                    <input type="number" id="itemValue" step="0.01" required>
-                </div>
-                <div class="form-group">
-                    <label>Loan Duration (Days)</label>
-                    <input type="number" id="itemDuration" value="30" required>
+                    <input type="number" id="val" step="0.01" required>
                 </div>
                 <div class="form-group">
                     <label>Interest Rate (%)</label>
-                    <input type="number" id="itemInterest" value="15" step="0.1" required>
+                    <input type="number" id="rate" value="15" required>
+                </div>
+                <div class="form-group">
+                    <label>Loan Days</label>
+                    <input type="number" id="days" value="30" required>
                 </div>
                 <button type="submit">Add Item</button>
             </form>
         </div>
-
-        <div id="items" class="tab-content">
+        <div id="items" class="content">
             <h3 style="margin-bottom: 20px;">Manage Items</h3>
-            <div id="itemsTable"></div>
-        </div>
-
-        <div id="loans" class="tab-content">
-            <h3 style="margin-bottom: 20px;">Active Loans</h3>
-            <div id="loansTable"></div>
+            <div id="itemslist"></div>
         </div>
     </div>
 
     <script>
-        function switchTab(tabName) {
-            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-            document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
-            document.getElementById(tabName).classList.add('active');
+        function switchtab(tab) {
+            document.querySelectorAll('.content').forEach(x => x.classList.remove('active'));
+            document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+            document.getElementById(tab).classList.add('active');
             event.target.classList.add('active');
-            
-            if (tabName === 'items') loadItems();
-            if (tabName === 'loans') loadLoans();
+            if (tab === 'items') loaditems();
         }
 
-        async function addItem(e) {
+        async function additem(e) {
             e.preventDefault();
-            
             const data = {
-                name: document.getElementById('itemName').value,
-                category: document.getElementById('itemCategory').value,
-                description: document.getElementById('itemDescription').value,
-                pawn_value: document.getElementById('itemValue').value,
-                loan_duration_days: document.getElementById('itemDuration').value,
-                interest_rate: document.getElementById('itemInterest').value
+                name: document.getElementById('name').value,
+                category: document.getElementById('cat').value,
+                desc: document.getElementById('desc').value,
+                value: document.getElementById('val').value,
+                rate: document.getElementById('rate').value,
+                days: document.getElementById('days').value
             };
-
-            try {
-                const res = await fetch('/admin/add-item', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data)
-                });
-                const result = await res.json();
-                
-                if (res.ok) {
-                    alert('Item added successfully!');
-                    e.target.reset();
-                } else {
-                    alert('Error adding item');
-                }
-            } catch (err) {
-                alert('Error');
+            const res = await fetch('/api/admin/add-item', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            if (res.ok) {
+                alert('Item added!');
+                e.target.reset();
             }
         }
 
-        async function loadItems() {
-            try {
-                const res = await fetch('/api/items?category=');
-                const items = await res.json();
-                const container = document.getElementById('itemsTable');
-                
-                container.innerHTML = `
-                    <table class="table">
-                        <thead>
-                            <tr>
-                                <th>Name</th>
-                                <th>Category</th>
-                                <th>Value</th>
-                                <th>Status</th>
-                                <th>Action</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${items.map(item => `
-                                <tr>
-                                    <td>${item.name}</td>
-                                    <td>${item.category}</td>
-                                    <td>$${item.pawn_value.toFixed(2)}</td>
-                                    <td>${item.status}</td>
-                                    <td><button class="delete-btn" onclick="deleteItem(${item.id})">Delete</button></td>
-                                </tr>
-                            `).join('')}
-                        </tbody>
-                    </table>
-                `;
-            } catch (err) {
-                document.getElementById('itemsTable').innerHTML = 'Error loading items';
-            }
-        }
-
-        async function deleteItem(itemId) {
-            if (!confirm('Delete this item?')) return;
+        async function loaditems() {
+            const res = await fetch('/api/admin/items');
+            const items = await res.json();
+            const div = document.getElementById('itemslist');
             
-            try {
-                const res = await fetch(`/admin/delete-item/${itemId}`, { method: 'DELETE' });
-                if (res.ok) {
-                    alert('Item deleted!');
-                    loadItems();
-                }
-            } catch (err) {
-                alert('Error deleting item');
+            if (!items.length) {
+                div.innerHTML = '<p>No items</p>';
+                return;
             }
+
+            div.innerHTML = `
+                <table>
+                    <thead>
+                        <tr><th>Name</th><th>Category</th><th>Value</th><th>Status</th><th>Action</th></tr>
+                    </thead>
+                    <tbody>
+                        ${items.map(i => `
+                            <tr>
+                                <td>${i.name}</td>
+                                <td>${i.cat}</td>
+                                <td>$${i.val.toFixed(2)}</td>
+                                <td>${i.status}</td>
+                                <td><button class="del" onclick="delitem('${i.id}')">Delete</button></td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
         }
 
-        async function loadLoans() {
-            const container = document.getElementById('loansTable');
-            container.innerHTML = 'Loading...';
-            // Loans would load from /admin/loans - simple table display
+        async function delitem(id) {
+            if (!confirm('Delete?')) return;
+            const res = await fetch(`/api/admin/delete-item/${id}`, { method: 'DELETE' });
+            if (res.ok) {
+                alert('Deleted!');
+                loaditems();
+            }
         }
     </script>
 </body>
 </html>
 '''
 
-ADMIN_ITEMS_TEMPLATE = '''
-<!DOCTYPE html>
-<html>
-<head><title>Manage Items</title></head>
-<body>
-    <h1>Manage Items</h1>
-    <table border="1">
-        <tr><th>ID</th><th>Name</th><th>Category</th><th>Value</th><th>Status</th></tr>
-        {% for item in items %}
-        <tr>
-            <td>{{ item.id }}</td>
-            <td>{{ item.name }}</td>
-            <td>{{ item.category }}</td>
-            <td>${{ item.pawn_value }}</td>
-            <td>{{ item.status }}</td>
-        </tr>
-        {% endfor %}
-    </table>
-</body>
-</html>
-'''
+# ============ INIT & RUN ============
 
-ADMIN_LOANS_TEMPLATE = '''
-<!DOCTYPE html>
-<html>
-<head><title>Active Loans</title></head>
-<body>
-    <h1>Active Loans</h1>
-    <table border="1">
-        <tr><th>ID</th><th>User</th><th>Item</th><th>Loan Amount</th><th>Status</th><th>Due Date</th></tr>
-        {% for loan in loans %}
-        <tr>
-            <td>{{ loan.id }}</td>
-            <td>{{ loan.user.username }}</td>
-            <td>{{ loan.item.name }}</td>
-            <td>${{ loan.loan_amount }}</td>
-            <td>{{ loan.status }}</td>
-            <td>{{ loan.due_date.strftime('%Y-%m-%d') }}</td>
-        </tr>
-        {% endfor %}
-    </table>
-</body>
-</html>
-'''
-
-# ============ ERROR HANDLERS ============
-
-@app.errorhandler(404)
-def not_found(e):
-    return jsonify({'error': 'Not found'}), 404
-
-@app.errorhandler(500)
-def internal_error(e):
-    db.session.rollback()
-    return jsonify({'error': 'Internal server error'}), 500
-
-# ============ DB INIT & RUN ============
-
-def init_db():
-    with app.app_context():
-        db.create_all()
-        
-        # Create admin user if doesn't exist
-        if not User.query.filter_by(username='admin').first():
-            admin = User(username='admin', email='admin@pawnshop.com', is_admin=True)
-            admin.set_password('admin123')
-            db.session.add(admin)
-            db.session.flush()
-            
-            # Add sample items
-            sample_items = [
-                Item(name='iPhone 14 Pro', category='Electronics', description='Mint condition', pawn_value=600, interest_rate=12),
-                Item(name='Gold Necklace', category='Jewelry', description='18k gold', pawn_value=500, interest_rate=10),
-                Item(name='Power Drill', category='Tools', description='DeWalt 20V', pawn_value=150, interest_rate=15),
-                Item(name='Gaming Laptop', category='Electronics', description='RTX 3080', pawn_value=1000, interest_rate=14),
-                Item(name='Mountain Bike', category='Sports', description='Trek full suspension', pawn_value=400, interest_rate=13),
-                Item(name='Leather Sofa', category='Furniture', description='Brown 3-seater', pawn_value=350, interest_rate=15),
-            ]
-            
-            for item in sample_items:
-                db.session.add(item)
-            
-            db.session.commit()
+def init():
+    # Sample items
+    sample = [
+        {'name': 'iPhone 14', 'category': 'Electronics', 'desc': 'Mint', 'value': 600, 'rate': 12, 'days': 30},
+        {'name': 'Gold Ring', 'category': 'Jewelry', 'desc': '18k', 'value': 500, 'rate': 10, 'days': 30},
+        {'name': 'Power Drill', 'category': 'Tools', 'desc': 'DeWalt', 'value': 150, 'rate': 15, 'days': 30},
+        {'name': 'Gaming PC', 'category': 'Electronics', 'desc': 'RTX 3080', 'value': 1000, 'rate': 14, 'days': 30},
+    ]
+    for s in sample:
+        iid = gen_id()
+        items_db[iid] = {**s, 'id': iid, 'status': 'available', 'created': datetime.utcnow().isoformat()}
+    
+    # Admin user
+    aid = gen_id()
+    users_db[aid] = {
+        'id': aid, 'username': 'admin', 'email': 'admin@shop.com',
+        'password_hash': generate_password_hash('admin123'),
+        'phone': '555-0000', 'dob': '1990-01-01', 'employment': 'employed',
+        'residence_proof': '', 'is_admin': True, 'created': datetime.utcnow().isoformat()
+    }
 
 if __name__ == '__main__':
-    init_db()
+    init()
     app.run(debug=True, host='0.0.0.0', port=5000)
