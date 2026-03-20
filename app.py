@@ -52,10 +52,14 @@ def register():
         dob = data.get('dob')
         employment = data.get('employment')
         residence_proof = data.get('residence_proof', '')
+        id_front = data.get('id_front', '')
+        id_back = data.get('id_back', '')
+        banking_letter = data.get('banking_letter', '')
+        bank_statement = data.get('bank_statement', '')
         
         # Validate
-        if not all([username, email, password, dob, employment, residence_proof]):
-            return jsonify({'error': 'All fields required'}), 400
+        if not all([username, email, password, dob, employment, residence_proof, id_front, id_back, banking_letter, bank_statement]):
+            return jsonify({'error': 'All fields required including banking documents'}), 400
         
         # Check if user exists
         for u in users_db.values():
@@ -75,6 +79,10 @@ def register():
             'dob': dob,
             'employment': employment,
             'residence_proof': residence_proof,
+            'id_front': id_front,
+            'id_back': id_back,
+            'banking_letter': banking_letter,
+            'bank_statement': bank_statement,
             'is_admin': False,
             'created': datetime.utcnow().isoformat()
         }
@@ -374,7 +382,7 @@ AUTH_PAGE = '''
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: Arial, sans-serif; background: #0a0a0a; color: #fff; }
-        .container { max-width: 500px; margin: 40px auto; padding: 35px; background: #1a1a1a; border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,0.8); }
+        .container { max-width: 550px; margin: 40px auto; padding: 35px; background: #1a1a1a; border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,0.8); }
         h1 { text-align: center; margin-bottom: 35px; color: #ffc107; font-size: 26px; }
         .form-group { margin-bottom: 16px; }
         label { display: block; margin-bottom: 6px; font-weight: bold; font-size: 13px; }
@@ -390,63 +398,109 @@ AUTH_PAGE = '''
         .proof-preview img { width: 100%; height: 100%; object-fit: cover; border-radius: 5px; }
         .file-label { display: block; padding: 10px; background: #2a2a2a; border: 1px dashed #ffc107; border-radius: 5px; text-align: center; cursor: pointer; font-size: 12px; transition: 0.3s; }
         .file-label:hover { background: #333; }
-        #proofFile { display: none; }
+        input[type="file"] { display: none; }
         .home { text-align: center; margin-top: 15px; }
         .home a { color: #ffc107; text-decoration: none; }
+        .scroll { max-height: 700px; overflow-y: auto; padding-right: 10px; }
+        .id-row { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+        .id-col { }
+        .id-col .proof-preview { width: 100%; height: 120px; }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>Create Account</h1>
         <div id="msg"></div>
-        <form id="form">
-            <div class="form-group">
-                <label>Username</label>
-                <input type="text" id="uname" required>
-            </div>
-            <div class="form-group">
-                <label>Email</label>
-                <input type="email" id="email" required>
-            </div>
-            <div class="form-group">
-                <label>Password</label>
-                <input type="password" id="pass" required>
-            </div>
-            <div class="form-group">
-                <label>Phone</label>
-                <input type="tel" id="phone">
-            </div>
-            <div class="row">
+        <div class="scroll">
+            <form id="form">
                 <div class="form-group">
-                    <label>Date of Birth</label>
-                    <input type="date" id="dob" required>
+                    <label>Username</label>
+                    <input type="text" id="uname" required>
                 </div>
                 <div class="form-group">
-                    <label>Employment Status</label>
-                    <select id="emp" required>
-                        <option value="">Select</option>
-                        <option value="employed">Employed</option>
-                        <option value="self-employed">Self-Employed</option>
-                        <option value="unemployed">Unemployed</option>
-                        <option value="student">Student</option>
-                        <option value="retired">Retired</option>
-                    </select>
+                    <label>Email</label>
+                    <input type="email" id="email" required>
                 </div>
-            </div>
-            <div class="form-group">
-                <label>Proof of Residence (Photo)</label>
-                <div class="proof-preview" id="preview">📄</div>
-                <label for="proofFile" class="file-label">Click to upload proof</label>
-                <input type="file" id="proofFile" accept="image/*">
-            </div>
-            <button type="submit">Create Account</button>
-        </form>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="pass" required>
+                </div>
+                <div class="form-group">
+                    <label>Phone</label>
+                    <input type="tel" id="phone">
+                </div>
+                <div class="row">
+                    <div class="form-group">
+                        <label>Date of Birth</label>
+                        <input type="date" id="dob" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Employment Status</label>
+                        <select id="emp" required>
+                            <option value="">Select</option>
+                            <option value="employed">Employed</option>
+                            <option value="self-employed">Self-Employed</option>
+                            <option value="unemployed">Unemployed</option>
+                            <option value="student">Student</option>
+                            <option value="retired">Retired</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Proof of Residence (Photo)</label>
+                    <div class="proof-preview" id="preview">📄</div>
+                    <label for="proofFile" class="file-label">Click to upload proof</label>
+                    <input type="file" id="proofFile" accept="image/*">
+                </div>
+
+                <div style="margin-top: 25px; padding-top: 20px; border-top: 1px solid #444;">
+                    <h3 style="color: #ffc107; margin-bottom: 15px; font-size: 15px;">Government ID Photos</h3>
+                    
+                    <div class="id-row">
+                        <div class="id-col">
+                            <label style="margin-bottom: 8px;">ID Front Side</label>
+                            <div class="proof-preview" id="previewFront">📷</div>
+                            <label for="idFrontFile" class="file-label">Upload Front</label>
+                            <input type="file" id="idFrontFile" accept="image/*">
+                        </div>
+                        <div class="id-col">
+                            <label style="margin-bottom: 8px;">ID Back Side</label>
+                            <div class="proof-preview" id="previewBack">📷</div>
+                            <label for="idBackFile" class="file-label">Upload Back</label>
+                            <input type="file" id="idBackFile" accept="image/*">
+                        </div>
+                    </div>
+                </div>
+
+                <div style="margin-top: 25px; padding-top: 20px; border-top: 1px solid #444;">
+                    <h3 style="color: #ffc107; margin-bottom: 15px; font-size: 15px;">Banking Documents (PDF)</h3>
+                    
+                    <div class="id-row">
+                        <div class="id-col">
+                            <label style="margin-bottom: 8px;">Banking Letter</label>
+                            <div style="width: 100%; padding: 15px; background: #2a2a2a; border: 1px dashed #ffc107; border-radius: 5px; text-align: center; margin-bottom: 10px;" id="bankLetterStatus">📄 No file</div>
+                            <label for="bankingLetterFile" class="file-label">Upload PDF</label>
+                            <input type="file" id="bankingLetterFile" accept=".pdf">
+                        </div>
+                        <div class="id-col">
+                            <label style="margin-bottom: 8px;">Bank Statement</label>
+                            <div style="width: 100%; padding: 15px; background: #2a2a2a; border: 1px dashed #ffc107; border-radius: 5px; text-align: center; margin-bottom: 10px;" id="bankStatementStatus">📄 No file</div>
+                            <label for="bankStatementFile" class="file-label">Upload PDF</label>
+                            <input type="file" id="bankStatementFile" accept=".pdf">
+                        </div>
+                    </div>
+                </div>
+                
+                <button type="submit" style="margin-top: 25px;">Create Account</button>
+            </form>
+        </div>
         <div class="home">
             <a href="/">← Home</a>
         </div>
     </div>
 
     <script>
+        // Proof of Residence
         document.getElementById('proofFile').addEventListener('change', function(e) {
             const file = e.target.files[0];
             if (file) {
@@ -459,11 +513,89 @@ AUTH_PAGE = '''
             }
         });
 
+        // ID Front
+        document.getElementById('idFrontFile').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(ev) {
+                    document.getElementById('previewFront').innerHTML = `<img src="${ev.target.result}">`;
+                    window.idFrontBase64 = ev.target.result;
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        // ID Back
+        document.getElementById('idBackFile').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(ev) {
+                    document.getElementById('previewBack').innerHTML = `<img src="${ev.target.result}">`;
+                    window.idBackBase64 = ev.target.result;
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        // Banking Letter PDF
+        document.getElementById('bankingLetterFile').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                if (file.type !== 'application/pdf') {
+                    show('error', 'Banking letter must be a PDF file');
+                    this.value = '';
+                    return;
+                }
+                const reader = new FileReader();
+                reader.onload = function(ev) {
+                    document.getElementById('bankLetterStatus').innerHTML = `✅ ${file.name}`;
+                    window.bankingLetterBase64 = ev.target.result;
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        // Bank Statement PDF
+        document.getElementById('bankStatementFile').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                if (file.type !== 'application/pdf') {
+                    show('error', 'Bank statement must be a PDF file');
+                    this.value = '';
+                    return;
+                }
+                const reader = new FileReader();
+                reader.onload = function(ev) {
+                    document.getElementById('bankStatementStatus').innerHTML = `✅ ${file.name}`;
+                    window.bankStatementBase64 = ev.target.result;
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
         document.getElementById('form').addEventListener('submit', async (e) => {
             e.preventDefault();
             
             if (!window.proofBase64) {
                 show('error', 'Please upload proof of residence');
+                return;
+            }
+            if (!window.idFrontBase64) {
+                show('error', 'Please upload ID front side');
+                return;
+            }
+            if (!window.idBackBase64) {
+                show('error', 'Please upload ID back side');
+                return;
+            }
+            if (!window.bankingLetterBase64) {
+                show('error', 'Please upload banking letter (PDF)');
+                return;
+            }
+            if (!window.bankStatementBase64) {
+                show('error', 'Please upload bank statement (PDF)');
                 return;
             }
 
@@ -474,7 +606,11 @@ AUTH_PAGE = '''
                 phone: document.getElementById('phone').value,
                 dob: document.getElementById('dob').value,
                 employment: document.getElementById('emp').value,
-                residence_proof: window.proofBase64
+                residence_proof: window.proofBase64,
+                id_front: window.idFrontBase64,
+                id_back: window.idBackBase64,
+                banking_letter: window.bankingLetterBase64,
+                bank_statement: window.bankStatementBase64
             };
 
             try {
