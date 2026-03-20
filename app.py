@@ -21,6 +21,10 @@ class User(db.Model):
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
     phone = db.Column(db.String(20))
+    date_of_birth = db.Column(db.Date)
+    place_of_residence = db.Column(db.String(255))
+    employment_status = db.Column(db.String(50))  # employed, self-employed, unemployed, student
+    profile_picture = db.Column(db.Text)  # base64 or URL
     is_admin = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
@@ -82,23 +86,38 @@ def admin_required(f):
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if request.method == 'POST':
-        data = request.get_json()
-        username = data.get('username')
-        email = data.get('email')
-        password = data.get('password')
-        phone = data.get('phone')
-        
-        if User.query.filter_by(username=username).first():
-            return jsonify({'error': 'Username exists'}), 400
-        if User.query.filter_by(email=email).first():
-            return jsonify({'error': 'Email exists'}), 400
-        
-        user = User(username=username, email=email, phone=phone)
-        user.set_password(password)
-        db.session.add(user)
-        db.session.commit()
-        
-        return jsonify({'success': True, 'message': 'Registered! Please login'}), 201
+        try:
+            data = request.get_json()
+            username = data.get('username')
+            email = data.get('email')
+            password = data.get('password')
+            phone = data.get('phone')
+            dob = data.get('date_of_birth')
+            residence = data.get('place_of_residence')
+            employment = data.get('employment_status')
+            profile_pic = data.get('profile_picture')
+            
+            if User.query.filter_by(username=username).first():
+                return jsonify({'error': 'Username exists'}), 400
+            if User.query.filter_by(email=email).first():
+                return jsonify({'error': 'Email exists'}), 400
+            
+            user = User(
+                username=username,
+                email=email,
+                phone=phone,
+                date_of_birth=dob,
+                place_of_residence=residence,
+                employment_status=employment,
+                profile_picture=profile_pic
+            )
+            user.set_password(password)
+            db.session.add(user)
+            db.session.commit()
+            
+            return jsonify({'success': True, 'message': 'Registered! Please login'}), 201
+        except Exception as e:
+            return jsonify({'error': str(e)}), 400
     
     return render_template_string(AUTH_TEMPLATE)
 
@@ -133,30 +152,28 @@ def home():
 
 @app.route('/browse')
 def browse():
-    category = request.args.get('category', '')
-    query = Item.query.filter_by(status='available')
-    if category:
-        query = query.filter_by(category=category)
-    items = query.all()
-    return render_template_string(BROWSE_TEMPLATE, items=items)
+    return render_template_string(BROWSE_TEMPLATE)
 
 @app.route('/api/items')
 def get_items():
-    category = request.args.get('category', '')
-    query = Item.query.filter_by(status='available')
-    if category:
-        query = query.filter_by(category=category)
-    items = query.all()
-    return jsonify([{
-        'id': item.id,
-        'name': item.name,
-        'category': item.category,
-        'description': item.description,
-        'pawn_value': item.pawn_value,
-        'loan_duration_days': item.loan_duration_days,
-        'interest_rate': item.interest_rate,
-        'image_url': item.image_url
-    } for item in items])
+    try:
+        category = request.args.get('category', '')
+        query = Item.query.filter_by(status='available')
+        if category and category != '':
+            query = query.filter_by(category=category)
+        items = query.all()
+        return jsonify([{
+            'id': item.id,
+            'name': item.name,
+            'category': item.category,
+            'description': item.description,
+            'pawn_value': item.pawn_value,
+            'loan_duration_days': item.loan_duration_days,
+            'interest_rate': item.interest_rate,
+            'image_url': item.image_url
+        } for item in items])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/pawn', methods=['POST'])
 @login_required
@@ -198,8 +215,7 @@ def pawn_item():
 @login_required
 def dashboard():
     user = User.query.get(session['user_id'])
-    loans = Loan.query.filter_by(user_id=user.id).all()
-    return render_template_string(DASHBOARD_TEMPLATE, user=user, loans=loans)
+    return render_template_string(DASHBOARD_TEMPLATE, user=user)
 
 @app.route('/api/loans')
 @login_required
@@ -233,10 +249,11 @@ def repay_loan(loan_id):
 @app.route('/admin')
 @admin_required
 def admin_dashboard():
-    total_items = Item.query.count()
-    available_items = Item.query.filter_by(status='available').count()
-    active_loans = Loan.query.filter_by(status='active').count()
-    total_users = User.query.count()
+    with app.app_context():
+        total_items = Item.query.count()
+        available_items = Item.query.filter_by(status='available').count()
+        active_loans = Loan.query.filter_by(status='active').count()
+        total_users = User.query.count()
     
     return render_template_string(ADMIN_TEMPLATE, 
         total_items=total_items,
@@ -299,18 +316,27 @@ AUTH_TEMPLATE = '''
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #1a1a1a; color: #fff; }
-        .container { max-width: 400px; margin: 100px auto; padding: 20px; background: #2a2a2a; border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
-        h1 { text-align: center; margin-bottom: 30px; color: #ffc107; }
-        .form-group { margin-bottom: 20px; }
-        label { display: block; margin-bottom: 5px; font-weight: 500; }
-        input { width: 100%; padding: 12px; border: 1px solid #444; border-radius: 5px; background: #333; color: #fff; }
-        input:focus { outline: none; border-color: #ffc107; background: #3a3a3a; }
-        button { width: 100%; padding: 12px; background: #ffc107; color: #000; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; transition: all 0.3s; }
+        .container { max-width: 450px; margin: 40px auto; padding: 30px; background: #2a2a2a; border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+        h1 { text-align: center; margin-bottom: 30px; color: #ffc107; font-size: 28px; }
+        .form-group { margin-bottom: 18px; }
+        label { display: block; margin-bottom: 6px; font-weight: 500; font-size: 14px; }
+        input, select { width: 100%; padding: 11px; border: 1px solid #444; border-radius: 5px; background: #333; color: #fff; font-size: 14px; }
+        input:focus, select:focus { outline: none; border-color: #ffc107; background: #3a3a3a; }
+        .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .row .form-group { margin-bottom: 0; }
+        button { width: 100%; padding: 12px; background: #ffc107; color: #000; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; transition: all 0.3s; font-size: 16px; }
         button:hover { background: #ffb600; transform: translateY(-2px); }
         .toggle { text-align: center; margin-top: 20px; }
-        .toggle a { color: #ffc107; text-decoration: none; }
-        .error { color: #ff6b6b; text-align: center; margin: 10px 0; }
-        .success { color: #51cf66; text-align: center; margin: 10px 0; }
+        .toggle a { color: #ffc107; text-decoration: none; cursor: pointer; }
+        .error { color: #ff6b6b; text-align: center; margin: 10px 0; font-size: 13px; }
+        .success { color: #51cf66; text-align: center; margin: 10px 0; font-size: 13px; }
+        #profilePreview { width: 80px; height: 80px; margin: 10px auto; border-radius: 8px; background: #1a1a1a; display: flex; align-items: center; justify-content: center; font-size: 40px; border: 2px solid #ffc107; overflow: hidden; }
+        #profilePreview img { width: 100%; height: 100%; object-fit: cover; }
+        .file-input-label { display: block; padding: 10px; background: #1a1a1a; border: 1px dashed #ffc107; border-radius: 5px; text-align: center; cursor: pointer; font-size: 13px; transition: all 0.3s; }
+        .file-input-label:hover { background: #262626; }
+        #fileInput { display: none; }
+        .home-link { text-align: center; margin-top: 15px; }
+        .home-link a { color: #ffc107; text-decoration: none; }
     </style>
 </head>
 <body>
@@ -318,6 +344,17 @@ AUTH_TEMPLATE = '''
         <h1 id="title">Login</h1>
         <div id="message"></div>
         <form id="authForm">
+            <div id="loginFields">
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" id="username" required>
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="password" required>
+                </div>
+            </div>
+
             <div id="registerFields" style="display: none;">
                 <div class="form-group">
                     <label>Username</label>
@@ -328,31 +365,67 @@ AUTH_TEMPLATE = '''
                     <input type="email" id="email" required>
                 </div>
                 <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="password" required>
+                </div>
+                <div class="form-group">
                     <label>Phone</label>
                     <input type="tel" id="phone">
                 </div>
-            </div>
-            <div id="loginFields">
+                <div class="row">
+                    <div class="form-group">
+                        <label>Date of Birth</label>
+                        <input type="date" id="date_of_birth">
+                    </div>
+                    <div class="form-group">
+                        <label>Place of Residence</label>
+                        <input type="text" id="place_of_residence" placeholder="City, Country">
+                    </div>
+                </div>
                 <div class="form-group">
-                    <label>Username</label>
-                    <input type="text" id="username" required>
+                    <label>Employment Status</label>
+                    <select id="employment_status">
+                        <option value="">Select Status</option>
+                        <option value="employed">Employed</option>
+                        <option value="self-employed">Self-Employed</option>
+                        <option value="unemployed">Unemployed</option>
+                        <option value="student">Student</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>ID Picture / Government Issued ID</label>
+                    <div id="profilePreview">📸</div>
+                    <label for="fileInput" class="file-input-label">Click to upload ID photo</label>
+                    <input type="file" id="fileInput" accept="image/*">
                 </div>
             </div>
-            <div class="form-group">
-                <label>Password</label>
-                <input type="password" id="password" required>
-            </div>
+
             <button type="submit">Submit</button>
         </form>
         <div class="toggle">
             <span id="toggleText">Don't have an account? </span>
-            <a href="#" id="toggleLink" onclick="toggleMode(event)">Register</a>
-            <a href="/" style="margin-left: 15px;">Back Home</a>
+            <a onclick="toggleMode(event)">Register</a>
+        </div>
+        <div class="home-link">
+            <a href="/">← Back Home</a>
         </div>
     </div>
 
     <script>
         let isLoginMode = true;
+
+        // Handle profile picture upload
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(event) {
+                    document.getElementById('profilePreview').innerHTML = `<img src="${event.target.result}" alt="Profile">`;
+                    window.profilePictureBase64 = event.target.result;
+                };
+                reader.readAsDataURL(file);
+            }
+        });
 
         document.getElementById('authForm').addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -361,9 +434,14 @@ AUTH_TEMPLATE = '''
             const url = isLoginMode ? '/login' : '/register';
             
             const body = { username, password };
+            
             if (!isLoginMode) {
                 body.email = document.getElementById('email').value;
                 body.phone = document.getElementById('phone').value;
+                body.date_of_birth = document.getElementById('date_of_birth').value;
+                body.place_of_residence = document.getElementById('place_of_residence').value;
+                body.employment_status = document.getElementById('employment_status').value;
+                body.profile_picture = window.profilePictureBase64 || '';
             }
 
             try {
@@ -396,7 +474,7 @@ AUTH_TEMPLATE = '''
             document.getElementById('loginFields').style.display = isLoginMode ? 'block' : 'none';
             document.getElementById('registerFields').style.display = isLoginMode ? 'none' : 'block';
             document.getElementById('toggleText').textContent = isLoginMode ? "Don't have an account? " : 'Already have an account? ';
-            document.getElementById('toggleLink').textContent = isLoginMode ? 'Register' : 'Login';
+            document.querySelector('.toggle a').textContent = isLoginMode ? 'Register' : 'Login';
             document.getElementById('message').innerHTML = '';
         }
 
@@ -626,8 +704,14 @@ DASHBOARD_TEMPLATE = '''
         nav a { color: #fff; text-decoration: none; margin-left: 20px; }
         .container { max-width: 1000px; margin: 0 auto; padding: 30px 20px; }
         .profile { background: #1a1a1a; padding: 25px; border-radius: 10px; margin-bottom: 30px; border: 1px solid #333; }
+        .profile-header { display: flex; gap: 30px; align-items: flex-start; }
+        .profile-pic { width: 150px; height: 150px; background: #2a2a2a; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 60px; border: 2px solid #ffc107; overflow: hidden; }
+        .profile-pic img { width: 100%; height: 100%; object-fit: cover; }
+        .profile-info { flex: 1; }
         .profile h2 { color: #ffc107; margin-bottom: 15px; }
-        .profile p { color: #ccc; margin-bottom: 8px; }
+        .profile-row { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 10px; }
+        .profile p { color: #ccc; margin-bottom: 8px; font-size: 14px; }
+        .profile strong { color: #ffc107; }
         .loans-section { background: #1a1a1a; padding: 25px; border-radius: 10px; border: 1px solid #333; }
         .loans-section h2 { color: #ffc107; margin-bottom: 20px; }
         .loan-card { background: #2a2a2a; padding: 20px; border-radius: 8px; margin-bottom: 15px; border-left: 4px solid #ffc107; }
@@ -657,10 +741,23 @@ DASHBOARD_TEMPLATE = '''
 
     <div class="container">
         <div class="profile">
-            <h2>My Profile</h2>
-            <p><strong>Username:</strong> {{ user.username }}</p>
-            <p><strong>Email:</strong> {{ user.email }}</p>
-            <p><strong>Phone:</strong> {{ user.phone or 'Not provided' }}</p>
+            <div class="profile-header">
+                <div class="profile-pic" id="profilePicContainer">👤</div>
+                <div class="profile-info">
+                    <h2 id="username">{{ user.username }}</h2>
+                    <div class="profile-row">
+                        <p><strong>Email:</strong> {{ user.email }}</p>
+                        <p><strong>Phone:</strong> {{ user.phone or 'Not provided' }}</p>
+                    </div>
+                    <div class="profile-row">
+                        <p><strong>Date of Birth:</strong> <span id="dob">{{ user.date_of_birth or 'Not provided' }}</span></p>
+                        <p><strong>Residence:</strong> <span id="residence">{{ user.place_of_residence or 'Not provided' }}</span></p>
+                    </div>
+                    <div class="profile-row">
+                        <p><strong>Employment Status:</strong> <span id="employment">{{ user.employment_status or 'Not provided' }}</span></p>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div class="loans-section">
@@ -672,6 +769,12 @@ DASHBOARD_TEMPLATE = '''
     </div>
 
     <script>
+        // Load profile picture if exists
+        const profilePic = '{{ user.profile_picture or "" }}';
+        if (profilePic) {
+            document.getElementById('profilePicContainer').innerHTML = `<img src="${profilePic}" alt="Profile">`;
+        }
+
         async function loadLoans() {
             try {
                 const res = await fetch('/api/loans');
@@ -1010,6 +1113,17 @@ ADMIN_LOANS_TEMPLATE = '''
 </html>
 '''
 
+# ============ ERROR HANDLERS ============
+
+@app.errorhandler(404)
+def not_found(e):
+    return jsonify({'error': 'Not found'}), 404
+
+@app.errorhandler(500)
+def internal_error(e):
+    db.session.rollback()
+    return jsonify({'error': 'Internal server error'}), 500
+
 # ============ DB INIT & RUN ============
 
 def init_db():
@@ -1021,6 +1135,7 @@ def init_db():
             admin = User(username='admin', email='admin@pawnshop.com', is_admin=True)
             admin.set_password('admin123')
             db.session.add(admin)
+            db.session.flush()
             
             # Add sample items
             sample_items = [
