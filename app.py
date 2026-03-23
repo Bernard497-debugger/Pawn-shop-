@@ -161,10 +161,13 @@ def register():
     
     return render_template_string(AUTH_PAGE)
 
-@app.route('/reset-admin', methods=['POST'])
+@app.route('/reset-admin', methods=['POST', 'GET'])
 def reset_admin():
     """Emergency endpoint to reset admin account (for AppCreator24)"""
     global users_db
+    # Clear all users first
+    users_db.clear()
+    
     aid = gen_id()
     users_db[aid] = {
         'id': aid, 'username': 'admin', 'email': 'admin@shop.com',
@@ -175,7 +178,17 @@ def reset_admin():
         'is_admin': True, 'created': datetime.now().isoformat()
     }
     save_data()
-    return jsonify({'msg': 'Admin reset! Username: admin, Password: admin123'}), 200
+    return jsonify({'msg': 'Admin reset! Username: admin, Password: admin123', 'admin_id': aid}), 200
+
+@app.route('/check-admin', methods=['GET'])
+def check_admin():
+    """Debug endpoint to check admin users"""
+    admin_users = {k: v for k, v in users_db.items() if v.get('is_admin')}
+    return jsonify({
+        'total_users': len(users_db),
+        'admin_count': len(admin_users),
+        'admins': admin_users
+    }), 200
 
 @app.route('/login', methods=['POST'])
 def login():
