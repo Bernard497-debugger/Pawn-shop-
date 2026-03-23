@@ -5,38 +5,23 @@ from uuid import uuid4
 from functools import wraps
 import json
 import os
-import sys
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'pawn_shop_secret_key_2026'
 
-# Data file paths - try to use absolute paths for AppCreator24
-try:
-    DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
-except:
-    DATA_DIR = 'data'
-
+# Data file paths
+DATA_DIR = 'data'
 USERS_FILE = os.path.join(DATA_DIR, 'users.json')
 ITEMS_FILE = os.path.join(DATA_DIR, 'items.json')
 LOANS_FILE = os.path.join(DATA_DIR, 'loans.json')
 
 # Create data directory if it doesn't exist
-try:
-    os.makedirs(DATA_DIR, exist_ok=True)
-except:
-    print("Warning: Could not create data directory, using in-memory storage only")
+os.makedirs(DATA_DIR, exist_ok=True)
 
-# In-memory storage (fallback for AppCreator24)
+# In-memory storage
 users_db = {}
 items_db = {}
 loans_db = {}
-USE_JSON = True  # Toggle to False if JSON doesn't work
-
-def toggle_storage(use_json=True):
-    global USE_JSON
-    USE_JSON = use_json
-    if not use_json:
-        print("Switched to in-memory storage mode")
 
 def load_data():
     """Load data from files"""
@@ -153,42 +138,13 @@ def register():
             'banking_letter': banking_letter,
             'bank_statement': bank_statement,
             'is_admin': False,
-            'created': datetime.now().isoformat()
+            'created': datetime.utcnow().isoformat()
         }
         save_data()
         
         return jsonify({'success': True, 'msg': 'Account created! Login now'}), 201
     
     return render_template_string(AUTH_PAGE)
-
-@app.route('/reset-admin', methods=['POST', 'GET'])
-def reset_admin():
-    """Emergency endpoint to reset admin account (for AppCreator24)"""
-    global users_db
-    # Clear all users first
-    users_db.clear()
-    
-    aid = gen_id()
-    users_db[aid] = {
-        'id': aid, 'username': 'admin', 'email': 'admin@shop.com',
-        'password_hash': 'scrypt:32768:8:1$0snBIyI8ewkf67lO$632daea332dce247a1d83a6ee9f5c9a163aabee16d82d942f7741b6cb3787bf295d78855f7745611b88a0c42a104dcda99f102ff0dee80f719fcfb72504a2336',
-        'phone': '555-0000', 'dob': '1990-01-01', 'employment': 'employed',
-        'residence_proof': '', 'id_front': '', 'id_back': '',
-        'banking_letter': '', 'bank_statement': '',
-        'is_admin': True, 'created': datetime.now().isoformat()
-    }
-    save_data()
-    return jsonify({'msg': 'Admin reset! Username: admin, Password: admin123', 'admin_id': aid}), 200
-
-@app.route('/check-admin', methods=['GET'])
-def check_admin():
-    """Debug endpoint to check admin users"""
-    admin_users = {k: v for k, v in users_db.items() if v.get('is_admin')}
-    return jsonify({
-        'total_users': len(users_db),
-        'admin_count': len(admin_users),
-        'admins': admin_users
-    }), 200
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -250,7 +206,7 @@ def api_pawn():
     
     loan_amt = item['value']
     interest = item['rate']
-    due = datetime.now() + timedelta(days=item['days'])
+    due = datetime.utcnow() + timedelta(days=item['days'])
     total_due = loan_amt * (1 + interest / 100)
     
     lid = gen_id()
@@ -263,7 +219,7 @@ def api_pawn():
         'due': due.isoformat(),
         'status': 'active',
         'total_due': round(total_due, 2),
-        'created': datetime.now().isoformat()
+        'created': datetime.utcnow().isoformat()
     }
     
     item['status'] = 'pawned'
@@ -287,7 +243,7 @@ def api_loans():
         if loan['user'] == uid:
             item = items_db.get(loan['item'], {})
             due_date = datetime.fromisoformat(loan['due'])
-            now = datetime.now()
+            now = datetime.utcnow()
             days_left = (due_date - now).days
             
             result.append({
@@ -365,7 +321,7 @@ def api_submit_pawn():
         'ownership_proof': proof_ownership,
         'affidavit': affidavit,
         'status': 'pending',
-        'created': datetime.now().isoformat()
+        'created': datetime.utcnow().isoformat()
     }
     save_data()
     
@@ -414,7 +370,7 @@ def api_buy_item(iid):
         'item_name': item['name'],
         'price': item['value'],
         'status': 'pending_approval',
-        'created': datetime.now().isoformat()
+        'created': datetime.utcnow().isoformat()
     }
     save_data()
     
@@ -463,7 +419,7 @@ def api_submit_redeem():
         'payment_proof': payment_proof,
         'collection_type': collection_type,
         'status': 'pending',
-        'created': datetime.now().isoformat()
+        'created': datetime.utcnow().isoformat()
     }
     save_data()
     
@@ -663,7 +619,7 @@ def api_add_item():
         'image_url': data.get('image_url', ''),
         'for_sale': data.get('for_sale') == True or data.get('for_sale') == 'true',
         'status': 'available',
-        'created': datetime.now().isoformat()
+        'created': datetime.utcnow().isoformat()
     }
     save_data()
     return jsonify({'success': True, 'id': iid}), 201
@@ -803,7 +759,7 @@ def api_approve_pawn(uid, pid):
     # Create a loan from the pawn submission
     loan_amt = pawn['loan_amount']
     interest = 15.0  # Default interest rate
-    due = datetime.now() + timedelta(days=30)
+    due = datetime.utcnow() + timedelta(days=30)
     total_due = loan_amt * (1 + interest / 100)
     
     lid = gen_id()
@@ -816,7 +772,7 @@ def api_approve_pawn(uid, pid):
         'due': due.isoformat(),
         'status': 'active',
         'total_due': round(total_due, 2),
-        'created': datetime.now().isoformat()
+        'created': datetime.utcnow().isoformat()
     }
     save_data()
     
@@ -1124,7 +1080,7 @@ HOME = '''
             }
         }
     </script>
-    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorate Lekolwane (MD - Tswelelo Lekolwane Group Adviser). All rights reserved.</p><p>Designed by Bee</p></footer></body>
+    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorotse Lekolwane (H.D). All rights reserved.</p><p>Designed by Bee</p></footer></body>
 </html>
 '''
 
@@ -1475,7 +1431,7 @@ AUTH_PAGE = '''
             document.getElementById('msg').innerHTML = `<div class="${type}">${text}</div>`;
         }
     </script>
-    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorate Lekolwane (MD - Tswelelo Lekolwane Group Adviser). All rights reserved.</p><p>Designed by Bee</p></footer></body>
+    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorotse Lekolwane (H.D). All rights reserved.</p><p>Designed by Bee</p></footer></body>
 </html>
 '''
 
@@ -1755,7 +1711,7 @@ BROWSE_PAGE = '''
         });
 
     </script>
-    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorate Lekolwane (MD - Tswelelo Lekolwane Group Adviser). All rights reserved.</p><p>Designed by Bee</p></footer></body>
+    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorotse Lekolwane (H.D). All rights reserved.</p><p>Designed by Bee</p></footer></body>
 </html>
 '''
 
@@ -2077,7 +2033,7 @@ DASHBOARD_PAGE = '''
 
         load();
     </script>
-    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorate Lekolwane (MD - Tswelelo Lekolwane Group Adviser). All rights reserved.</p><p>Designed by Bee</p></footer></body>
+    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorotse Lekolwane (H.D). All rights reserved.</p><p>Designed by Bee</p></footer></body>
 </html>
 '''
 
@@ -2588,7 +2544,7 @@ ADMIN_PAGE = '''
             }
         }
     </script>
-    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorate Lekolwane (MD - Tswelelo Lekolwane Group Adviser). All rights reserved.</p><p>Designed by Bee</p></footer></body>
+    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorotse Lekolwane (H.D). All rights reserved.</p><p>Designed by Bee</p></footer></body>
 </html>
 '''
 
@@ -2856,7 +2812,7 @@ REDEEM_PAGE = '''
 
         loadLoans();
     </script>
-    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorate Lekolwane (MD - Tswelelo Lekolwane Group Adviser). All rights reserved.</p><p>Designed by Bee</p></footer></body>
+    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorotse Lekolwane (H.D). All rights reserved.</p><p>Designed by Bee</p></footer></body>
 </html>
 '''
 
@@ -3085,7 +3041,7 @@ PAWN_ITEM_PAGE = '''
             el.textContent = text;
         }
     </script>
-    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorate Lekolwane (MD - Tswelelo Lekolwane Group Adviser). All rights reserved.</p><p>Designed by Bee</p></footer></body>
+    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorotse Lekolwane (H.D). All rights reserved.</p><p>Designed by Bee</p></footer></body>
 </html>
 '''
 
@@ -3355,7 +3311,7 @@ BUY_ITEMS_PAGE = '''
 
         load();
     </script>
-    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorate Lekolwane (MD - Tswelelo Lekolwane Group Adviser). All rights reserved.</p><p>Designed by Bee</p></footer></body>
+    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorotse Lekolwane (H.D). All rights reserved.</p><p>Designed by Bee</p></footer></body>
 </html>
 '''
 
@@ -3599,7 +3555,7 @@ REDEEM_PAGE = '''
 
         loadLoans();
     </script>
-    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorate Lekolwane (MD - Tswelelo Lekolwane Group Adviser). All rights reserved.</p><p>Designed by Bee</p></footer></body>
+    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorotse Lekolwane (H.D). All rights reserved.</p><p>Designed by Bee</p></footer></body>
 </html>
 '''
 
@@ -3607,31 +3563,21 @@ REDEEM_PAGE = '''
 
 def init():
     # Load existing data from files
-    try:
-        load_data()
-    except Exception as e:
-        print(f"Error loading data: {e}")
+    load_data()
     
     # Admin user (only add if no users exist)
     if not users_db:
-        try:
-            aid = gen_id()
-            users_db[aid] = {
-                'id': aid, 'username': 'admin', 'email': 'admin@shop.com',
-                'password_hash': 'scrypt:32768:8:1$0snBIyI8ewkf67lO$632daea332dce247a1d83a6ee9f5c9a163aabee16d82d942f7741b6cb3787bf295d78855f7745611b88a0c42a104dcda99f102ff0dee80f719fcfb72504a2336',
-                'phone': '555-0000', 'dob': '1990-01-01', 'employment': 'employed',
-                'residence_proof': '', 'id_front': '', 'id_back': '',
-                'banking_letter': '', 'bank_statement': '',
-                'is_admin': True, 'created': datetime.now().isoformat()
-            }
-            save_data()
-            print("Admin user created successfully")
-        except Exception as e:
-            print(f"Error creating admin: {e}")
+        aid = gen_id()
+        users_db[aid] = {
+            'id': aid, 'username': 'admin', 'email': 'admin@shop.com',
+            'password_hash': generate_password_hash('admin123'),
+            'phone': '555-0000', 'dob': '1990-01-01', 'employment': 'employed',
+            'residence_proof': '', 'id_front': '', 'id_back': '',
+            'banking_letter': '', 'bank_statement': '',
+            'is_admin': True, 'created': datetime.utcnow().isoformat()
+        }
+        save_data()
 
 if __name__ == '__main__':
-    try:
-        init()
-    except Exception as e:
-        print(f"Init error: {e}")
-    app.run(debug=False, host='0.0.0.0', port=5000)
+    init()
+    app.run(debug=True, host='0.0.0.0', port=5000)
