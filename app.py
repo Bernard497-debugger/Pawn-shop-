@@ -5,23 +5,38 @@ from uuid import uuid4
 from functools import wraps
 import json
 import os
+import sys
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'pawn_shop_secret_key_2026'
 
-# Data file paths
-DATA_DIR = 'data'
+# Data file paths - try to use absolute paths for AppCreator24
+try:
+    DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+except:
+    DATA_DIR = 'data'
+
 USERS_FILE = os.path.join(DATA_DIR, 'users.json')
 ITEMS_FILE = os.path.join(DATA_DIR, 'items.json')
 LOANS_FILE = os.path.join(DATA_DIR, 'loans.json')
 
 # Create data directory if it doesn't exist
-os.makedirs(DATA_DIR, exist_ok=True)
+try:
+    os.makedirs(DATA_DIR, exist_ok=True)
+except:
+    print("Warning: Could not create data directory, using in-memory storage only")
 
-# In-memory storage
+# In-memory storage (fallback for AppCreator24)
 users_db = {}
 items_db = {}
 loans_db = {}
+USE_JSON = True  # Toggle to False if JSON doesn't work
+
+def toggle_storage(use_json=True):
+    global USE_JSON
+    USE_JSON = use_json
+    if not use_json:
+        print("Switched to in-memory storage mode")
 
 def load_data():
     """Load data from files"""
@@ -145,6 +160,22 @@ def register():
         return jsonify({'success': True, 'msg': 'Account created! Login now'}), 201
     
     return render_template_string(AUTH_PAGE)
+
+@app.route('/reset-admin', methods=['POST'])
+def reset_admin():
+    """Emergency endpoint to reset admin account (for AppCreator24)"""
+    global users_db
+    aid = gen_id()
+    users_db[aid] = {
+        'id': aid, 'username': 'admin', 'email': 'admin@shop.com',
+        'password_hash': 'scrypt:32768:8:1$0snBIyI8ewkf67lO$632daea332dce247a1d83a6ee9f5c9a163aabee16d82d942f7741b6cb3787bf295d78855f7745611b88a0c42a104dcda99f102ff0dee80f719fcfb72504a2336',
+        'phone': '555-0000', 'dob': '1990-01-01', 'employment': 'employed',
+        'residence_proof': '', 'id_front': '', 'id_back': '',
+        'banking_letter': '', 'bank_statement': '',
+        'is_admin': True, 'created': datetime.utcnow().isoformat()
+    }
+    save_data()
+    return jsonify({'msg': 'Admin reset! Username: admin, Password: admin123'}), 200
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -1080,7 +1111,7 @@ HOME = '''
             }
         }
     </script>
-    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorotse Lekolwane (H.D). All rights reserved.</p><p>Designed by Bee</p></footer></body>
+    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorate Lekolwane (MD - Tswelelo Lekolwane Group Adviser). All rights reserved.</p><p>Designed by Bee</p></footer></body>
 </html>
 '''
 
@@ -1431,7 +1462,7 @@ AUTH_PAGE = '''
             document.getElementById('msg').innerHTML = `<div class="${type}">${text}</div>`;
         }
     </script>
-    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorotse Lekolwane (H.D). All rights reserved.</p><p>Designed by Bee</p></footer></body>
+    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorate Lekolwane (MD - Tswelelo Lekolwane Group Adviser). All rights reserved.</p><p>Designed by Bee</p></footer></body>
 </html>
 '''
 
@@ -1711,7 +1742,7 @@ BROWSE_PAGE = '''
         });
 
     </script>
-    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorotse Lekolwane (H.D). All rights reserved.</p><p>Designed by Bee</p></footer></body>
+    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorate Lekolwane (MD - Tswelelo Lekolwane Group Adviser). All rights reserved.</p><p>Designed by Bee</p></footer></body>
 </html>
 '''
 
@@ -2033,7 +2064,7 @@ DASHBOARD_PAGE = '''
 
         load();
     </script>
-    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorotse Lekolwane (H.D). All rights reserved.</p><p>Designed by Bee</p></footer></body>
+    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorate Lekolwane (MD - Tswelelo Lekolwane Group Adviser). All rights reserved.</p><p>Designed by Bee</p></footer></body>
 </html>
 '''
 
@@ -2544,7 +2575,7 @@ ADMIN_PAGE = '''
             }
         }
     </script>
-    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorotse Lekolwane (H.D). All rights reserved.</p><p>Designed by Bee</p></footer></body>
+    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorate Lekolwane (MD - Tswelelo Lekolwane Group Adviser). All rights reserved.</p><p>Designed by Bee</p></footer></body>
 </html>
 '''
 
@@ -2812,7 +2843,7 @@ REDEEM_PAGE = '''
 
         loadLoans();
     </script>
-    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorotse Lekolwane (H.D). All rights reserved.</p><p>Designed by Bee</p></footer></body>
+    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorate Lekolwane (MD - Tswelelo Lekolwane Group Adviser). All rights reserved.</p><p>Designed by Bee</p></footer></body>
 </html>
 '''
 
@@ -3041,7 +3072,7 @@ PAWN_ITEM_PAGE = '''
             el.textContent = text;
         }
     </script>
-    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorotse Lekolwane (H.D). All rights reserved.</p><p>Designed by Bee</p></footer></body>
+    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorate Lekolwane (MD - Tswelelo Lekolwane Group Adviser). All rights reserved.</p><p>Designed by Bee</p></footer></body>
 </html>
 '''
 
@@ -3311,7 +3342,7 @@ BUY_ITEMS_PAGE = '''
 
         load();
     </script>
-    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorotse Lekolwane (H.D). All rights reserved.</p><p>Designed by Bee</p></footer></body>
+    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorate Lekolwane (MD - Tswelelo Lekolwane Group Adviser). All rights reserved.</p><p>Designed by Bee</p></footer></body>
 </html>
 '''
 
@@ -3555,7 +3586,7 @@ REDEEM_PAGE = '''
 
         loadLoans();
     </script>
-    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorotse Lekolwane (H.D). All rights reserved.</p><p>Designed by Bee</p></footer></body>
+    <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorate Lekolwane (MD - Tswelelo Lekolwane Group Adviser). All rights reserved.</p><p>Designed by Bee</p></footer></body>
 </html>
 '''
 
@@ -3570,7 +3601,7 @@ def init():
         aid = gen_id()
         users_db[aid] = {
             'id': aid, 'username': 'admin', 'email': 'admin@shop.com',
-            'password_hash': generate_password_hash('admin123'),
+            'password_hash': 'scrypt:32768:8:1$0snBIyI8ewkf67lO$632daea332dce247a1d83a6ee9f5c9a163aabee16d82d942f7741b6cb3787bf295d78855f7745611b88a0c42a104dcda99f102ff0dee80f719fcfb72504a2336',
             'phone': '555-0000', 'dob': '1990-01-01', 'employment': 'employed',
             'residence_proof': '', 'id_front': '', 'id_back': '',
             'banking_letter': '', 'bank_statement': '',
