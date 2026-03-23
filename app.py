@@ -6,9 +6,157 @@ from functools import wraps
 import json
 import os
 import sys
+import sqlite3
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'pawn_shop_secret_key_2026'
+
+# Database configuration
+DB_PATH = 'pawn_shop.db'
+
+def get_db():
+    """Get database connection"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    """Initialize SQLite database"""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        
+        # Users table
+        c.execute('''CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            username TEXT UNIQUE NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            phone TEXT,
+            dob TEXT,
+            employment TEXT,
+            residence_proof TEXT,
+            id_front TEXT,
+            id_back TEXT,
+            banking_letter TEXT,
+            bank_statement TEXT,
+            is_admin BOOLEAN DEFAULT 0,
+            created TEXT,
+            pawn_submissions TEXT,
+            redeem_requests TEXT,
+            purchases TEXT
+        )''')
+        
+        # Items table
+        c.execute('''CREATE TABLE IF NOT EXISTS items (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            category TEXT,
+            description TEXT,
+            value REAL,
+            rate REAL,
+            days INTEGER,
+            image_url TEXT,
+            for_sale BOOLEAN DEFAULT 0,
+            status TEXT DEFAULT 'available',
+            created TEXT
+        )''')
+        
+        # Loans table
+        c.execute('''CREATE TABLE IF NOT EXISTS loans (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            item_id TEXT NOT NULL,
+            amount REAL,
+            rate REAL,
+            due_date TEXT,
+            status TEXT DEFAULT 'active',
+            total_due REAL,
+            created TEXT,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )''')
+        
+        conn.commit()
+        conn.close()
+        print("✓ Database initialized")
+    except Exception as e:
+        print(f"Error initializing DB: {e}")
+
+def load_data_from_db():
+    """Load data from SQLite into memory"""
+    global users_db, items_db, loans_db
+    
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        
+        # Load users
+        c.execute('SELECT * FROM users')
+        for row in c.fetchall():
+            user_dict = dict(row)
+            user_dict['pawn_submissions'] = json.loads(user_dict.get('pawn_submissions') or '{}')
+            user_dict['redeem_requests'] = json.loads(user_dict.get('redeem_requests') or '{}')
+            user_dict['purchases'] = json.loads(user_dict.get('purchases') or '{}')
+            users_db[user_dict['id']] = user_dict
+        
+        # Load items
+        c.execute('SELECT * FROM items')
+        for row in c.fetchall():
+            items_db[row['id']] = dict(row)
+        
+        # Load loans
+        c.execute('SELECT * FROM loans')
+        for row in c.fetchall():
+            loans_db[row['id']] = dict(row)
+        
+        conn.close()
+        if users_db or items_db or loans_db:
+            print(f"✓ Loaded {len(users_db)} users, {len(items_db)} items, {len(loans_db)} loans from DB")
+    except Exception as e:
+        print(f"Error loading from DB: {e}")
+
+def save_data_to_db():
+    """Save data from memory to SQLite"""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        
+        # Save users
+        for uid, user in users_db.items():
+            user_copy = user.copy()
+            user_copy['pawn_submissions'] = json.dumps(user.get('pawn_submissions', {}))
+            user_copy['redeem_requests'] = json.dumps(user.get('redeem_requests', {}))
+            user_copy['purchases'] = json.dumps(user.get('purchases', {}))
+            
+            c.execute('''REPLACE INTO users VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                (user_copy['id'], user_copy['username'], user_copy['email'], 
+                 user_copy['password_hash'], user_copy.get('phone'), user_copy.get('dob'),
+                 user_copy.get('employment'), user_copy.get('residence_proof'),
+                 user_copy.get('id_front'), user_copy.get('id_back'),
+                 user_copy.get('banking_letter'), user_copy.get('bank_statement'),
+                 user_copy.get('is_admin', False), user_copy.get('created'),
+                 user_copy['pawn_submissions'], user_copy['redeem_requests'],
+                 user_copy['purchases']))
+        
+        # Save items
+        for iid, item in items_db.items():
+            c.execute('''REPLACE INTO items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                (item['id'], item['name'], item.get('category'), item.get('desc'),
+                 item.get('value'), item.get('rate'), item.get('days'),
+                 item.get('image_url'), item.get('for_sale', False),
+                 item.get('status', 'available'), item.get('created')))
+        
+        # Save loans
+        for lid, loan in loans_db.items():
+            c.execute('''REPLACE INTO loans VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                (loan['id'], loan['user'], loan['item'], loan['amount'],
+                 loan['rate'], loan['due'], loan['status'], loan['total_due'],
+                 loan['created']))
+        
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Error saving to DB: {e}")
 
 # Data file paths - try to use absolute paths for AppCreator24
 try:
@@ -39,41 +187,12 @@ def toggle_storage(use_json=True):
         print("Switched to in-memory storage mode")
 
 def load_data():
-    """Load data from files"""
-    global users_db, items_db, loans_db
-    
-    if os.path.exists(USERS_FILE):
-        try:
-            with open(USERS_FILE, 'r') as f:
-                users_db = json.load(f)
-        except:
-            users_db = {}
-    
-    if os.path.exists(ITEMS_FILE):
-        try:
-            with open(ITEMS_FILE, 'r') as f:
-                items_db = json.load(f)
-        except:
-            items_db = {}
-    
-    if os.path.exists(LOANS_FILE):
-        try:
-            with open(LOANS_FILE, 'r') as f:
-                loans_db = json.load(f)
-        except:
-            loans_db = {}
+    """Load data from SQLite database"""
+    load_data_from_db()
 
 def save_data():
-    """Save data to files"""
-    try:
-        with open(USERS_FILE, 'w') as f:
-            json.dump(users_db, f, indent=2)
-        with open(ITEMS_FILE, 'w') as f:
-            json.dump(items_db, f, indent=2)
-        with open(LOANS_FILE, 'w') as f:
-            json.dump(loans_db, f, indent=2)
-    except Exception as e:
-        print(f"Error saving data: {e}")
+    """Save data to SQLite database"""
+    save_data_to_db()
 
 def gen_id():
     return str(uuid4())[:10]
@@ -168,11 +287,12 @@ def reset_admin():
     aid = gen_id()
     users_db[aid] = {
         'id': aid, 'username': 'admin', 'email': 'admin@shop.com',
-        'password_hash': 'scrypt:32768:8:1$ldn94ZeUtL5Y1777$340fcaa135b071047bed855632eb055bb2087871295ef6a23ce3f174e1aa94db81c5ef9ef63c992c2155d33e9f828302f04c2fd5a4d6b4b7994483fd420f6df4',
+        'password_hash': 'pbkdf2:sha256:1000000$8oQcBveoiBLZh6KY$7a1d730b7dafee11463aa588d09258e1175111bb1b0703aae598bed26f290a03',
         'phone': '555-0000', 'dob': '1990-01-01', 'employment': 'employed',
         'residence_proof': '', 'id_front': '', 'id_back': '',
         'banking_letter': '', 'bank_statement': '',
-        'is_admin': True, 'created': datetime.now().isoformat()
+        'is_admin': True, 'created': datetime.now().isoformat(),
+        'pawn_submissions': {}, 'redeem_requests': {}, 'purchases': {}
     }
     save_data()
     return jsonify({'msg': 'Admin reset! Username: admin, Password: admin123', 'admin_id': aid}), 200
@@ -3603,7 +3723,10 @@ REDEEM_PAGE = '''
 # ============ INIT & RUN ============
 
 def init():
-    # Load existing data from files
+    # Initialize database
+    init_db()
+    
+    # Load existing data from database
     try:
         load_data()
     except Exception as e:
@@ -3617,7 +3740,7 @@ def init():
             aid = gen_id()
             users_db[aid] = {
                 'id': aid, 'username': 'admin', 'email': 'admin@shop.com',
-                'password_hash': 'scrypt:32768:8:1$ldn94ZeUtL5Y1777$340fcaa135b071047bed855632eb055bb2087871295ef6a23ce3f174e1aa94db81c5ef9ef63c992c2155d33e9f828302f04c2fd5a4d6b4b7994483fd420f6df4',
+                'password_hash': 'pbkdf2:sha256:1000000$8oQcBveoiBLZh6KY$7a1d730b7dafee11463aa588d09258e1175111bb1b0703aae598bed26f290a03',
                 'phone': '555-0000', 'dob': '1990-01-01', 'employment': 'employed',
                 'residence_proof': '', 'id_front': '', 'id_back': '',
                 'banking_letter': '', 'bank_statement': '',
