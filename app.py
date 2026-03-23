@@ -153,7 +153,7 @@ def register():
             'banking_letter': banking_letter,
             'bank_statement': bank_statement,
             'is_admin': False,
-            'created': datetime.utcnow().isoformat()
+            'created': datetime.now().isoformat()
         }
         save_data()
         
@@ -172,7 +172,7 @@ def reset_admin():
         'phone': '555-0000', 'dob': '1990-01-01', 'employment': 'employed',
         'residence_proof': '', 'id_front': '', 'id_back': '',
         'banking_letter': '', 'bank_statement': '',
-        'is_admin': True, 'created': datetime.utcnow().isoformat()
+        'is_admin': True, 'created': datetime.now().isoformat()
     }
     save_data()
     return jsonify({'msg': 'Admin reset! Username: admin, Password: admin123'}), 200
@@ -237,7 +237,7 @@ def api_pawn():
     
     loan_amt = item['value']
     interest = item['rate']
-    due = datetime.utcnow() + timedelta(days=item['days'])
+    due = datetime.now() + timedelta(days=item['days'])
     total_due = loan_amt * (1 + interest / 100)
     
     lid = gen_id()
@@ -250,7 +250,7 @@ def api_pawn():
         'due': due.isoformat(),
         'status': 'active',
         'total_due': round(total_due, 2),
-        'created': datetime.utcnow().isoformat()
+        'created': datetime.now().isoformat()
     }
     
     item['status'] = 'pawned'
@@ -274,7 +274,7 @@ def api_loans():
         if loan['user'] == uid:
             item = items_db.get(loan['item'], {})
             due_date = datetime.fromisoformat(loan['due'])
-            now = datetime.utcnow()
+            now = datetime.now()
             days_left = (due_date - now).days
             
             result.append({
@@ -352,7 +352,7 @@ def api_submit_pawn():
         'ownership_proof': proof_ownership,
         'affidavit': affidavit,
         'status': 'pending',
-        'created': datetime.utcnow().isoformat()
+        'created': datetime.now().isoformat()
     }
     save_data()
     
@@ -401,7 +401,7 @@ def api_buy_item(iid):
         'item_name': item['name'],
         'price': item['value'],
         'status': 'pending_approval',
-        'created': datetime.utcnow().isoformat()
+        'created': datetime.now().isoformat()
     }
     save_data()
     
@@ -450,7 +450,7 @@ def api_submit_redeem():
         'payment_proof': payment_proof,
         'collection_type': collection_type,
         'status': 'pending',
-        'created': datetime.utcnow().isoformat()
+        'created': datetime.now().isoformat()
     }
     save_data()
     
@@ -650,7 +650,7 @@ def api_add_item():
         'image_url': data.get('image_url', ''),
         'for_sale': data.get('for_sale') == True or data.get('for_sale') == 'true',
         'status': 'available',
-        'created': datetime.utcnow().isoformat()
+        'created': datetime.now().isoformat()
     }
     save_data()
     return jsonify({'success': True, 'id': iid}), 201
@@ -790,7 +790,7 @@ def api_approve_pawn(uid, pid):
     # Create a loan from the pawn submission
     loan_amt = pawn['loan_amount']
     interest = 15.0  # Default interest rate
-    due = datetime.utcnow() + timedelta(days=30)
+    due = datetime.now() + timedelta(days=30)
     total_due = loan_amt * (1 + interest / 100)
     
     lid = gen_id()
@@ -803,7 +803,7 @@ def api_approve_pawn(uid, pid):
         'due': due.isoformat(),
         'status': 'active',
         'total_due': round(total_due, 2),
-        'created': datetime.utcnow().isoformat()
+        'created': datetime.now().isoformat()
     }
     save_data()
     
@@ -3594,21 +3594,31 @@ REDEEM_PAGE = '''
 
 def init():
     # Load existing data from files
-    load_data()
+    try:
+        load_data()
+    except Exception as e:
+        print(f"Error loading data: {e}")
     
     # Admin user (only add if no users exist)
     if not users_db:
-        aid = gen_id()
-        users_db[aid] = {
-            'id': aid, 'username': 'admin', 'email': 'admin@shop.com',
-            'password_hash': 'scrypt:32768:8:1$0snBIyI8ewkf67lO$632daea332dce247a1d83a6ee9f5c9a163aabee16d82d942f7741b6cb3787bf295d78855f7745611b88a0c42a104dcda99f102ff0dee80f719fcfb72504a2336',
-            'phone': '555-0000', 'dob': '1990-01-01', 'employment': 'employed',
-            'residence_proof': '', 'id_front': '', 'id_back': '',
-            'banking_letter': '', 'bank_statement': '',
-            'is_admin': True, 'created': datetime.utcnow().isoformat()
-        }
-        save_data()
+        try:
+            aid = gen_id()
+            users_db[aid] = {
+                'id': aid, 'username': 'admin', 'email': 'admin@shop.com',
+                'password_hash': 'scrypt:32768:8:1$0snBIyI8ewkf67lO$632daea332dce247a1d83a6ee9f5c9a163aabee16d82d942f7741b6cb3787bf295d78855f7745611b88a0c42a104dcda99f102ff0dee80f719fcfb72504a2336',
+                'phone': '555-0000', 'dob': '1990-01-01', 'employment': 'employed',
+                'residence_proof': '', 'id_front': '', 'id_back': '',
+                'banking_letter': '', 'bank_statement': '',
+                'is_admin': True, 'created': datetime.now().isoformat()
+            }
+            save_data()
+            print("Admin user created successfully")
+        except Exception as e:
+            print(f"Error creating admin: {e}")
 
 if __name__ == '__main__':
-    init()
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    try:
+        init()
+    except Exception as e:
+        print(f"Init error: {e}")
+    app.run(debug=False, host='0.0.0.0', port=5000)
