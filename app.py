@@ -116,85 +116,84 @@ def load_data_from_db():
         conn = get_db()
         c = conn.cursor()
         
-        # Load users
-        c.execute('SELECT * FROM users')
-        rows = c.fetchall()
-        col_names = [desc[0] for desc in c.description] if c.description else []
+        # Load users - use explicit column names to ensure order
+        c.execute('''SELECT id, username, email, password_hash, phone, dob, employment, 
+                    residence_proof, id_front, id_back, banking_letter, bank_statement, 
+                    is_admin, created, pawn_submissions, redeem_requests, purchases, messages 
+                    FROM users''')
         
-        print(f"Loading users: found {len(rows)} rows, columns: {col_names}")
-        
-        for row in rows:
+        for row in c.fetchall():
             try:
-                # Convert tuple row to dict
-                if col_names:
-                    user_dict = dict(zip(col_names, row))
-                else:
-                    # Fallback if no description
-                    user_dict = row if isinstance(row, dict) else {}
-                
-                if not user_dict or 'id' not in user_dict:
-                    print(f"Skipping invalid user row: {row}")
-                    continue
-                    
-                user_dict['pawn_submissions'] = json.loads(user_dict.get('pawn_submissions') or '{}')
-                user_dict['redeem_requests'] = json.loads(user_dict.get('redeem_requests') or '{}')
-                user_dict['purchases'] = json.loads(user_dict.get('purchases') or '{}')
-                user_dict['messages'] = json.loads(user_dict.get('messages') or '[]')
+                user_dict = {
+                    'id': row[0],
+                    'username': row[1],
+                    'email': row[2],
+                    'password_hash': row[3],
+                    'phone': row[4],
+                    'dob': row[5],
+                    'employment': row[6],
+                    'residence_proof': row[7],
+                    'id_front': row[8],
+                    'id_back': row[9],
+                    'banking_letter': row[10],
+                    'bank_statement': row[11],
+                    'is_admin': row[12],
+                    'created': row[13],
+                    'pawn_submissions': json.loads(row[14] or '{}'),
+                    'redeem_requests': json.loads(row[15] or '{}'),
+                    'purchases': json.loads(row[16] or '{}'),
+                    'messages': json.loads(row[17] or '[]')
+                }
                 users_db[user_dict['id']] = user_dict
-                print(f"  Loaded user: {user_dict.get('username')}")
+                print(f"  ✓ Loaded user: {user_dict['username']}")
             except Exception as e:
-                print(f"Error loading user row {row}: {e}")
-                continue
+                print(f"  Error loading user: {e}")
         
         # Load items
-        c.execute('SELECT * FROM items')
-        rows = c.fetchall()
-        col_names = [desc[0] for desc in c.description] if c.description else []
+        c.execute('''SELECT id, name, category, description, value, rate, days, 
+                    image_url, for_sale, status, created FROM items''')
         
-        print(f"Loading items: found {len(rows)} rows")
-        
-        for row in rows:
+        for row in c.fetchall():
             try:
-                if col_names:
-                    item_dict = dict(zip(col_names, row))
-                else:
-                    item_dict = row if isinstance(row, dict) else {}
-                
-                if not item_dict or 'id' not in item_dict:
-                    continue
-                    
+                item_dict = {
+                    'id': row[0],
+                    'name': row[1],
+                    'category': row[2],
+                    'desc': row[3],
+                    'value': row[4],
+                    'rate': row[5],
+                    'days': row[6],
+                    'image_url': row[7],
+                    'for_sale': row[8],
+                    'status': row[9],
+                    'created': row[10]
+                }
                 items_db[item_dict['id']] = item_dict
             except Exception as e:
-                print(f"Error loading item row {row}: {e}")
-                continue
+                print(f"  Error loading item: {e}")
         
         # Load loans
-        c.execute('SELECT * FROM loans')
-        rows = c.fetchall()
-        col_names = [desc[0] for desc in c.description] if c.description else []
+        c.execute('''SELECT id, user_id, item_id, amount, rate, due_date, status, total_due, created FROM loans''')
         
-        print(f"Loading loans: found {len(rows)} rows")
-        
-        for row in rows:
+        for row in c.fetchall():
             try:
-                if col_names:
-                    loan_dict = dict(zip(col_names, row))
-                else:
-                    loan_dict = row if isinstance(row, dict) else {}
-                
-                if not loan_dict or 'id' not in loan_dict:
-                    continue
-                    
+                loan_dict = {
+                    'id': row[0],
+                    'user': row[1],
+                    'item': row[2],
+                    'amount': row[3],
+                    'rate': row[4],
+                    'due': row[5],
+                    'status': row[6],
+                    'total_due': row[7],
+                    'created': row[8]
+                }
                 loans_db[loan_dict['id']] = loan_dict
             except Exception as e:
-                print(f"Error loading loan row {row}: {e}")
-                continue
+                print(f"  Error loading loan: {e}")
         
         conn.close()
-        if users_db or items_db or loans_db:
-            print(f"✓ Loaded {len(users_db)} users, {len(items_db)} items, {len(loans_db)} loans from PostgreSQL")
-        else:
-            print("⚠ No data loaded from database (empty tables)")
+        print(f"✓ Loaded {len(users_db)} users, {len(items_db)} items, {len(loans_db)} loans from PostgreSQL")
     except Exception as e:
         print(f"Error loading from PostgreSQL: {e}")
         import traceback
