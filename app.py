@@ -118,31 +118,44 @@ def load_data_from_db():
         
         # Load users
         c.execute('SELECT * FROM users')
-        for row in c.fetchall():
-            user_dict = dict(zip([desc[0] for desc in c.description], row))
-            user_dict['pawn_submissions'] = json.loads(user_dict.get('pawn_submissions') or '{}')
-            user_dict['redeem_requests'] = json.loads(user_dict.get('redeem_requests') or '{}')
-            user_dict['purchases'] = json.loads(user_dict.get('purchases') or '{}')
-            user_dict['messages'] = json.loads(user_dict.get('messages') or '[]')
-            users_db[user_dict['id']] = user_dict
+        rows = c.fetchall()
+        if rows and c.description:
+            col_names = [desc[0] for desc in c.description]
+            for row in rows:
+                user_dict = dict(zip(col_names, row))
+                user_dict['pawn_submissions'] = json.loads(user_dict.get('pawn_submissions') or '{}')
+                user_dict['redeem_requests'] = json.loads(user_dict.get('redeem_requests') or '{}')
+                user_dict['purchases'] = json.loads(user_dict.get('purchases') or '{}')
+                user_dict['messages'] = json.loads(user_dict.get('messages') or '[]')
+                users_db[user_dict['id']] = user_dict
         
         # Load items
         c.execute('SELECT * FROM items')
-        for row in c.fetchall():
-            item_dict = dict(zip([desc[0] for desc in c.description], row))
-            items_db[item_dict['id']] = item_dict
+        rows = c.fetchall()
+        if rows and c.description:
+            col_names = [desc[0] for desc in c.description]
+            for row in rows:
+                item_dict = dict(zip(col_names, row))
+                items_db[item_dict['id']] = item_dict
         
         # Load loans
         c.execute('SELECT * FROM loans')
-        for row in c.fetchall():
-            loan_dict = dict(zip([desc[0] for desc in c.description], row))
-            loans_db[loan_dict['id']] = loan_dict
+        rows = c.fetchall()
+        if rows and c.description:
+            col_names = [desc[0] for desc in c.description]
+            for row in rows:
+                loan_dict = dict(zip(col_names, row))
+                loans_db[loan_dict['id']] = loan_dict
         
         conn.close()
         if users_db or items_db or loans_db:
             print(f"✓ Loaded {len(users_db)} users, {len(items_db)} items, {len(loans_db)} loans from PostgreSQL")
+        else:
+            print("⚠ No data loaded from database (empty tables)")
     except Exception as e:
         print(f"Error loading from PostgreSQL: {e}")
+        import traceback
+        traceback.print_exc()
 
 def save_data_to_db():
     """Save data from memory to PostgreSQL"""
@@ -158,55 +171,94 @@ def save_data_to_db():
             user_copy['purchases'] = json.dumps(user.get('purchases', {}))
             user_copy['messages'] = json.dumps(user.get('messages', []))
             
-            c.execute('''INSERT INTO users VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT(id) DO UPDATE SET 
-                username = EXCLUDED.username,
-                email = EXCLUDED.email,
-                password_hash = EXCLUDED.password_hash,
-                phone = EXCLUDED.phone,
-                dob = EXCLUDED.dob,
-                employment = EXCLUDED.employment,
-                residence_proof = EXCLUDED.residence_proof,
-                id_front = EXCLUDED.id_front,
-                id_back = EXCLUDED.id_back,
-                banking_letter = EXCLUDED.banking_letter,
-                bank_statement = EXCLUDED.bank_statement,
-                is_admin = EXCLUDED.is_admin,
-                created = EXCLUDED.created,
-                pawn_submissions = EXCLUDED.pawn_submissions,
-                redeem_requests = EXCLUDED.redeem_requests,
-                purchases = EXCLUDED.purchases,
-                messages = EXCLUDED.messages''',
-                (user_copy['id'], user_copy['username'], user_copy['email'], 
-                 user_copy['password_hash'], user_copy.get('phone'), user_copy.get('dob'),
-                 user_copy.get('employment'), user_copy.get('residence_proof'),
-                 user_copy.get('id_front'), user_copy.get('id_back'),
-                 user_copy.get('banking_letter'), user_copy.get('bank_statement'),
-                 user_copy.get('is_admin', False), user_copy.get('created'),
-                 user_copy['pawn_submissions'], user_copy['redeem_requests'],
-                 user_copy['purchases'], user_copy['messages']))
+            try:
+                c.execute('''INSERT INTO users (id, username, email, password_hash, phone, dob, employment, 
+                            residence_proof, id_front, id_back, banking_letter, bank_statement, is_admin, 
+                            created, pawn_submissions, redeem_requests, purchases, messages) 
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(id) DO UPDATE SET 
+                    username = EXCLUDED.username,
+                    email = EXCLUDED.email,
+                    password_hash = EXCLUDED.password_hash,
+                    phone = EXCLUDED.phone,
+                    dob = EXCLUDED.dob,
+                    employment = EXCLUDED.employment,
+                    residence_proof = EXCLUDED.residence_proof,
+                    id_front = EXCLUDED.id_front,
+                    id_back = EXCLUDED.id_back,
+                    banking_letter = EXCLUDED.banking_letter,
+                    bank_statement = EXCLUDED.bank_statement,
+                    is_admin = EXCLUDED.is_admin,
+                    created = EXCLUDED.created,
+                    pawn_submissions = EXCLUDED.pawn_submissions,
+                    redeem_requests = EXCLUDED.redeem_requests,
+                    purchases = EXCLUDED.purchases,
+                    messages = EXCLUDED.messages''',
+                    (user_copy['id'], user_copy['username'], user_copy['email'], 
+                     user_copy['password_hash'], user_copy.get('phone'), user_copy.get('dob'),
+                     user_copy.get('employment'), user_copy.get('residence_proof'),
+                     user_copy.get('id_front'), user_copy.get('id_back'),
+                     user_copy.get('banking_letter'), user_copy.get('bank_statement'),
+                     user_copy.get('is_admin', False), user_copy.get('created'),
+                     user_copy['pawn_submissions'], user_copy['redeem_requests'],
+                     user_copy['purchases'], user_copy['messages']))
+            except Exception as e:
+                print(f"Error saving user {uid}: {e}")
+                raise
         
         # Save items
         for iid, item in items_db.items():
-            c.execute('''INSERT INTO items VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT(id) DO UPDATE SET name = EXCLUDED.name''',
-                (item['id'], item['name'], item.get('category'), item.get('desc'),
-                 item.get('value'), item.get('rate'), item.get('days'),
-                 item.get('image_url'), item.get('for_sale', False),
-                 item.get('status', 'available'), item.get('created')))
+            try:
+                c.execute('''INSERT INTO items (id, name, category, description, value, rate, days, 
+                            image_url, for_sale, status, created) 
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(id) DO UPDATE SET 
+                    name = EXCLUDED.name,
+                    category = EXCLUDED.category,
+                    description = EXCLUDED.description,
+                    value = EXCLUDED.value,
+                    rate = EXCLUDED.rate,
+                    days = EXCLUDED.days,
+                    image_url = EXCLUDED.image_url,
+                    for_sale = EXCLUDED.for_sale,
+                    status = EXCLUDED.status,
+                    created = EXCLUDED.created''',
+                    (item['id'], item['name'], item.get('category'), item.get('desc'),
+                     item.get('value'), item.get('rate'), item.get('days'),
+                     item.get('image_url'), item.get('for_sale', False),
+                     item.get('status', 'available'), item.get('created')))
+            except Exception as e:
+                print(f"Error saving item {iid}: {e}")
+                raise
         
         # Save loans
         for lid, loan in loans_db.items():
-            c.execute('''INSERT INTO loans VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT(id) DO UPDATE SET user_id = EXCLUDED.user_id''',
-                (loan['id'], loan['user'], loan['item'], loan['amount'],
-                 loan['rate'], loan['due'], loan['status'], loan['total_due'],
-                 loan['created']))
+            try:
+                c.execute('''INSERT INTO loans (id, user_id, item_id, amount, rate, due_date, status, total_due, created) 
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(id) DO UPDATE SET 
+                    user_id = EXCLUDED.user_id,
+                    item_id = EXCLUDED.item_id,
+                    amount = EXCLUDED.amount,
+                    rate = EXCLUDED.rate,
+                    due_date = EXCLUDED.due_date,
+                    status = EXCLUDED.status,
+                    total_due = EXCLUDED.total_due,
+                    created = EXCLUDED.created''',
+                    (loan['id'], loan['user'], loan['item'], loan['amount'],
+                     loan['rate'], loan['due'], loan['status'], loan['total_due'],
+                     loan['created']))
+            except Exception as e:
+                print(f"Error saving loan {lid}: {e}")
+                raise
         
         conn.commit()
         conn.close()
+        print(f"✓ Saved {len(users_db)} users, {len(items_db)} items, {len(loans_db)} loans to PostgreSQL")
     except Exception as e:
         print(f"Error saving to PostgreSQL: {e}")
+        import traceback
+        traceback.print_exc()
 
 # In-memory storage (for current session)
 users_db = {}
