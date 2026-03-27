@@ -46,13 +46,23 @@ def get_db():
         raise
 
 def init_db():
-    """Initialize PostgreSQL database"""
+    """Initialize PostgreSQL database - drops and recreates tables"""
     try:
         conn = get_db()
         c = conn.cursor()
         
-        # Users table
-        c.execute('''CREATE TABLE IF NOT EXISTS users (
+        # Drop existing tables if they have wrong schema
+        try:
+            c.execute('DROP TABLE IF EXISTS loans CASCADE')
+            c.execute('DROP TABLE IF EXISTS items CASCADE')
+            c.execute('DROP TABLE IF EXISTS users CASCADE')
+            conn.commit()
+            print("Dropped existing tables")
+        except:
+            pass
+        
+        # Create fresh tables
+        c.execute('''CREATE TABLE users (
             id TEXT PRIMARY KEY,
             username TEXT UNIQUE NOT NULL,
             email TEXT UNIQUE NOT NULL,
@@ -74,7 +84,7 @@ def init_db():
         )''')
         
         # Items table
-        c.execute('''CREATE TABLE IF NOT EXISTS items (
+        c.execute('''CREATE TABLE items (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             category TEXT,
@@ -88,8 +98,8 @@ def init_db():
             created TEXT
         )''')
         
-        # Loans table (without foreign key to avoid constraints)
-        c.execute('''CREATE TABLE IF NOT EXISTS loans (
+        # Loans table
+        c.execute('''CREATE TABLE loans (
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
             item_id TEXT NOT NULL,
@@ -103,7 +113,7 @@ def init_db():
         
         conn.commit()
         conn.close()
-        print("✓ PostgreSQL database initialized successfully!")
+        print("✓ PostgreSQL tables created successfully!")
     except Exception as e:
         print(f"Error initializing PostgreSQL DB: {e}")
         raise
@@ -116,88 +126,108 @@ def load_data_from_db():
         conn = get_db()
         c = conn.cursor()
         
-        # Load users - use explicit column names to ensure order
-        c.execute('''SELECT id, username, email, password_hash, phone, dob, employment, 
-                    residence_proof, id_front, id_back, banking_letter, bank_statement, 
-                    is_admin, created, pawn_submissions, redeem_requests, purchases, messages 
-                    FROM users''')
+        # Check if tables exist first
+        c.execute("""
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.tables 
+                WHERE table_name = 'users'
+            )
+        """)
         
-        for row in c.fetchall():
-            try:
-                user_dict = {
-                    'id': row[0],
-                    'username': row[1],
-                    'email': row[2],
-                    'password_hash': row[3],
-                    'phone': row[4],
-                    'dob': row[5],
-                    'employment': row[6],
-                    'residence_proof': row[7],
-                    'id_front': row[8],
-                    'id_back': row[9],
-                    'banking_letter': row[10],
-                    'bank_statement': row[11],
-                    'is_admin': row[12],
-                    'created': row[13],
-                    'pawn_submissions': json.loads(row[14] or '{}'),
-                    'redeem_requests': json.loads(row[15] or '{}'),
-                    'purchases': json.loads(row[16] or '{}'),
-                    'messages': json.loads(row[17] or '[]')
-                }
-                users_db[user_dict['id']] = user_dict
-                print(f"  ✓ Loaded user: {user_dict['username']}")
-            except Exception as e:
-                print(f"  Error loading user: {e}")
+        if not c.fetchone()[0]:
+            print("⚠ Tables don't exist yet, skipping load")
+            conn.close()
+            return
+        
+        # Load users - use explicit column names to ensure order
+        try:
+            c.execute('''SELECT id, username, email, password_hash, phone, dob, employment, 
+                        residence_proof, id_front, id_back, banking_letter, bank_statement, 
+                        is_admin, created, pawn_submissions, redeem_requests, purchases, messages 
+                        FROM users''')
+            
+            for row in c.fetchall():
+                try:
+                    user_dict = {
+                        'id': row[0],
+                        'username': row[1],
+                        'email': row[2],
+                        'password_hash': row[3],
+                        'phone': row[4],
+                        'dob': row[5],
+                        'employment': row[6],
+                        'residence_proof': row[7],
+                        'id_front': row[8],
+                        'id_back': row[9],
+                        'banking_letter': row[10],
+                        'bank_statement': row[11],
+                        'is_admin': row[12],
+                        'created': row[13],
+                        'pawn_submissions': json.loads(row[14] or '{}'),
+                        'redeem_requests': json.loads(row[15] or '{}'),
+                        'purchases': json.loads(row[16] or '{}'),
+                        'messages': json.loads(row[17] or '[]')
+                    }
+                    users_db[user_dict['id']] = user_dict
+                    print(f"  ✓ Loaded user: {user_dict['username']}")
+                except Exception as e:
+                    print(f"  Error loading user: {e}")
+        except Exception as e:
+            print(f"Error loading users: {e}")
         
         # Load items
-        c.execute('''SELECT id, name, category, description, value, rate, days, 
-                    image_url, for_sale, status, created FROM items''')
-        
-        for row in c.fetchall():
-            try:
-                item_dict = {
-                    'id': row[0],
-                    'name': row[1],
-                    'category': row[2],
-                    'desc': row[3],
-                    'value': row[4],
-                    'rate': row[5],
-                    'days': row[6],
-                    'image_url': row[7],
-                    'for_sale': row[8],
-                    'status': row[9],
-                    'created': row[10]
-                }
-                items_db[item_dict['id']] = item_dict
-            except Exception as e:
-                print(f"  Error loading item: {e}")
+        try:
+            c.execute('''SELECT id, name, category, description, value, rate, days, 
+                        image_url, for_sale, status, created FROM items''')
+            
+            for row in c.fetchall():
+                try:
+                    item_dict = {
+                        'id': row[0],
+                        'name': row[1],
+                        'category': row[2],
+                        'desc': row[3],
+                        'value': row[4],
+                        'rate': row[5],
+                        'days': row[6],
+                        'image_url': row[7],
+                        'for_sale': row[8],
+                        'status': row[9],
+                        'created': row[10]
+                    }
+                    items_db[item_dict['id']] = item_dict
+                except Exception as e:
+                    print(f"  Error loading item: {e}")
+        except Exception as e:
+            print(f"Error loading items: {e}")
         
         # Load loans
-        c.execute('''SELECT id, user_id, item_id, amount, rate, due_date, status, total_due, created FROM loans''')
-        
-        for row in c.fetchall():
-            try:
-                loan_dict = {
-                    'id': row[0],
-                    'user': row[1],
-                    'item': row[2],
-                    'amount': row[3],
-                    'rate': row[4],
-                    'due': row[5],
-                    'status': row[6],
-                    'total_due': row[7],
-                    'created': row[8]
-                }
-                loans_db[loan_dict['id']] = loan_dict
-            except Exception as e:
-                print(f"  Error loading loan: {e}")
+        try:
+            c.execute('''SELECT id, user_id, item_id, amount, rate, due_date, status, total_due, created FROM loans''')
+            
+            for row in c.fetchall():
+                try:
+                    loan_dict = {
+                        'id': row[0],
+                        'user': row[1],
+                        'item': row[2],
+                        'amount': row[3],
+                        'rate': row[4],
+                        'due': row[5],
+                        'status': row[6],
+                        'total_due': row[7],
+                        'created': row[8]
+                    }
+                    loans_db[loan_dict['id']] = loan_dict
+                except Exception as e:
+                    print(f"  Error loading loan: {e}")
+        except Exception as e:
+            print(f"Error loading loans: {e}")
         
         conn.close()
         print(f"✓ Loaded {len(users_db)} users, {len(items_db)} items, {len(loans_db)} loans from PostgreSQL")
     except Exception as e:
         print(f"Error loading from PostgreSQL: {e}")
-        import traceback
-        traceback.print_exc()
 
 def save_data_to_db():
     """Save data from memory to PostgreSQL"""
