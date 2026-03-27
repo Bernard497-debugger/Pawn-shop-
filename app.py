@@ -229,10 +229,10 @@ def register():
         data = request.get_json()
         username = data.get('username', '').strip()
         email = data.get('email', '').strip()
-        password = data.get('password')
+        password = data.get('password', '').strip()
         phone = data.get('phone', '').strip()
-        dob = data.get('dob')
-        employment = data.get('employment')
+        dob = data.get('dob', '').strip()
+        employment = data.get('employment', '').strip()
         residence_proof = data.get('residence_proof', '')
         id_front = data.get('id_front', '')
         id_back = data.get('id_back', '')
@@ -241,7 +241,14 @@ def register():
         
         # Validate - basic fields required
         if not all([username, email, password, dob, employment, phone]):
-            return jsonify({'error': 'Username, email, password, phone, DOB, and employment required'}), 400
+            missing = []
+            if not username: missing.append('username')
+            if not email: missing.append('email')
+            if not password: missing.append('password')
+            if not phone: missing.append('phone')
+            if not dob: missing.append('dob')
+            if not employment: missing.append('employment')
+            return jsonify({'error': f'Missing fields: {", ".join(missing)}'}), 400
         
         # Check if user exists
         for u in users_db.values():
@@ -250,13 +257,15 @@ def register():
             if u['email'] == email:
                 return jsonify({'error': 'Email taken'}), 400
         
-        # Create user
+        # Create user with hashed password
         uid = gen_id()
+        password_hash = generate_password_hash(password, method='pbkdf2:sha256')
+        
         users_db[uid] = {
             'id': uid,
             'username': username,
             'email': email,
-            'password_hash': generate_password_hash(password),
+            'password_hash': password_hash,
             'phone': phone,
             'dob': dob,
             'employment': employment,
@@ -271,9 +280,16 @@ def register():
             'redeem_requests': {},
             'purchases': {}
         }
-        save_data()
         
-        return jsonify({'success': True, 'msg': 'Account created! Login now'}), 201
+        # Save to database
+        try:
+            save_data()
+            print(f"✓ User created: {username} (ID: {uid})")
+        except Exception as e:
+            print(f"✗ Error saving user {username}: {e}")
+            return jsonify({'error': 'Failed to save account'}), 500
+        
+        return jsonify({'success': True, 'msg': 'Account created! Login now', 'user_id': uid}), 201
     
     return render_template_string(AUTH_PAGE)
 
@@ -307,18 +323,100 @@ def check_admin():
         'admins': admin_users
     }), 200
 
+@app.route('/db-status', methods=['GET'])
+def db_status():
+    """Check database status and connectivity"""
+    db_info = {
+        'database_file': DB_PATH,
+        'file_exists': os.path.exists(DB_PATH),
+        'memory_data': {
+            'users': len(users_db),
+            'items': len(items_db),
+            'loans': len(loans_db)
+        },
+        'database_data': {}
+    }
+    
+    # Check database connectivity
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        
+        # Count users in DB
+        c.execute('SELECT COUNT(*) as count FROM users')
+        user_count = c.fetchone()['count']
+        
+        # Count items in DB
+        c.execute('SELECT COUNT(*) as count FROM items')
+        item_count = c.fetchone()['count']
+        
+        # Count loans in DB
+        c.execute('SELECT COUNT(*) as count FROM loans')
+        loan_count = c.fetchone()['count']
+        
+        db_info['database_data'] = {
+            'users': user_count,
+            'items': item_count,
+            'loans': loan_count
+        }
+        
+        db_info['database_connected'] = True
+        db_info['status'] = '✓ Database working perfectly!'
+        
+        conn.close()
+    except Exception as e:
+        db_info['database_connected'] = False
+        db_info['error'] = str(e)
+        db_info['status'] = '✗ Database connection failed'
+    
+    return jsonify(db_info), 200
+
+@app.route('/debug/users', methods=['GET'])
+def debug_users():
+    """Debug endpoint - list all users (development only)"""
+    user_list = []
+    for uid, u in users_db.items():
+        user_list.append({
+            'id': uid,
+            'username': u.get('username'),
+            'email': u.get('email'),
+            'is_admin': u.get('is_admin'),
+            'password_hash_preview': u.get('password_hash', '')[:30] + '...' if u.get('password_hash') else 'None',
+            'created': u.get('created')
+        })
+    
+    return jsonify({
+        'total_users': len(users_db),
+        'users': user_list
+    }), 200
+
 @app.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
-    username = data.get('username')
-    password = data.get('password')
+    username = data.get('username', '').strip()
+    password = data.get('password', '').strip()
     
+    if not username or not password:
+        return jsonify({'error': 'Username and password required'}), 400
+    
+    # Search for user
     for uid, u in users_db.items():
-        if u['username'] == username and check_password_hash(u['password_hash'], password):
-            session['user_id'] = uid
-            session['username'] = username
-            return jsonify({'success': True, 'is_admin': u['is_admin']}), 200
+        if u['username'] == username:
+            # User found, check password
+            try:
+                if check_password_hash(u['password_hash'], password):
+                    session['user_id'] = uid
+                    session['username'] = username
+                    print(f"✓ Login successful: {username}")
+                    return jsonify({'success': True, 'is_admin': u['is_admin']}), 200
+                else:
+                    print(f"✗ Wrong password for user: {username}")
+                    return jsonify({'error': 'Invalid credentials'}), 401
+            except Exception as e:
+                print(f"✗ Password check error for {username}: {e}")
+                return jsonify({'error': 'Invalid credentials'}), 401
     
+    print(f"✗ User not found: {username}")
     return jsonify({'error': 'Invalid credentials'}), 401
 
 @app.route('/logout')
@@ -402,14 +500,13 @@ def api_loans():
     
     for lid, loan in loans_db.items():
         if loan['user'] == uid:
-            item = items_db.get(loan['item'], {})
             due_date = datetime.fromisoformat(loan['due'])
             now = datetime.now()
             days_left = (due_date - now).days
             
             result.append({
                 'id': lid,
-                'item': item.get('name', 'Unknown Item'),
+                'item': loan.get('item', 'Unknown Item'),  # Item name is stored directly
                 'amount': loan['amount'],
                 'rate': loan['rate'],
                 'total_due': loan['total_due'],
@@ -927,7 +1024,8 @@ def api_approve_pawn(uid, pid):
     loans_db[lid] = {
         'id': lid,
         'user': uid,
-        'item': pid,
+        'item': pawn.get('item_name', 'Unknown Item'),  # Store item name instead of pawn ID
+        'item_description': pawn.get('description', ''),
         'amount': loan_amt,
         'rate': interest,
         'due': due.isoformat(),
