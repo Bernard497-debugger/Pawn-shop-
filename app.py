@@ -6,162 +6,100 @@ from functools import wraps
 import json
 import os
 import sys
-import sqlite3
+import psycopg2
+import psycopg2.extras
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'pawn_shop_secret_key_2026'
 
-# Database configuration - Auto-detect PostgreSQL or SQLite
-DB_TYPE = 'sqlite'  # Default
+# PostgreSQL Database Configuration
 DATABASE_URL = os.getenv('DATABASE_URL')
 
-if DATABASE_URL:
-    DB_TYPE = 'postgres'
-    # For Render/hosted PostgreSQL
-    try:
-        import psycopg2
-        import psycopg2.extras
-    except ImportError:
-        print("Warning: psycopg2 not installed. Using SQLite fallback.")
-        DB_TYPE = 'sqlite'
-else:
-    DB_PATH = 'pawn_shop.db'
+if not DATABASE_URL:
+    print("ERROR: DATABASE_URL environment variable not set!")
+    print("Add this to your environment: DATABASE_URL=postgresql://user:password@host:5432/dbname")
+    sys.exit(1)
 
 def get_db():
-    """Get database connection - PostgreSQL or SQLite"""
-    if DB_TYPE == 'postgres':
-        try:
-            conn = psycopg2.connect(DATABASE_URL)
-            return conn
-        except Exception as e:
-            print(f"PostgreSQL error: {e}. Falling back to SQLite.")
-            DB_TYPE = 'sqlite'
-            conn = sqlite3.connect(DB_PATH)
-            conn.row_factory = sqlite3.Row
-            return conn
-    else:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
+    """Get PostgreSQL database connection"""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
         return conn
+    except Exception as e:
+        print(f"PostgreSQL connection error: {e}")
+        raise
 
 def init_db():
-    """Initialize database (PostgreSQL or SQLite)"""
+    """Initialize PostgreSQL database"""
     try:
         conn = get_db()
         c = conn.cursor()
         
-        if DB_TYPE == 'postgres':
-            # PostgreSQL version
-            c.execute('''CREATE TABLE IF NOT EXISTS users (
-                id TEXT PRIMARY KEY,
-                username TEXT UNIQUE NOT NULL,
-                email TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                phone TEXT,
-                dob TEXT,
-                employment TEXT,
-                residence_proof TEXT,
-                id_front TEXT,
-                id_back TEXT,
-                banking_letter TEXT,
-                bank_statement TEXT,
-                is_admin BOOLEAN DEFAULT FALSE,
-                created TEXT,
-                pawn_submissions TEXT,
-                redeem_requests TEXT,
-                purchases TEXT,
-                messages TEXT
-            )''')
-            
-            c.execute('''CREATE TABLE IF NOT EXISTS items (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                category TEXT,
-                description TEXT,
-                value REAL,
-                rate REAL,
-                days INTEGER,
-                image_url TEXT,
-                for_sale BOOLEAN DEFAULT FALSE,
-                status TEXT DEFAULT 'available',
-                created TEXT
-            )''')
-            
-            c.execute('''CREATE TABLE IF NOT EXISTS loans (
-                id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                item_id TEXT NOT NULL,
-                amount REAL,
-                rate REAL,
-                due_date TEXT,
-                status TEXT DEFAULT 'active',
-                total_due REAL,
-                created TEXT,
-                FOREIGN KEY(user_id) REFERENCES users(id)
-            )''')
-        else:
-            # SQLite version
-            c.execute('''CREATE TABLE IF NOT EXISTS users (
-                id TEXT PRIMARY KEY,
-                username TEXT UNIQUE NOT NULL,
-                email TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                phone TEXT,
-                dob TEXT,
-                employment TEXT,
-                residence_proof TEXT,
-                id_front TEXT,
-                id_back TEXT,
-                banking_letter TEXT,
-                bank_statement TEXT,
-                is_admin BOOLEAN DEFAULT 0,
-                created TEXT,
-                pawn_submissions TEXT,
-                redeem_requests TEXT,
-                purchases TEXT,
-                messages TEXT
-            )''')
-            
-            c.execute('''CREATE TABLE IF NOT EXISTS items (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                category TEXT,
-                description TEXT,
-                value REAL,
-                rate REAL,
-                days INTEGER,
-                image_url TEXT,
-                for_sale BOOLEAN DEFAULT 0,
-                status TEXT DEFAULT 'available',
-                created TEXT
-            )''')
-            
-            c.execute('''CREATE TABLE IF NOT EXISTS loans (
-                id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                item_id TEXT NOT NULL,
-                amount REAL,
-                rate REAL,
-                due_date TEXT,
-                status TEXT DEFAULT 'active',
-                total_due REAL,
-                created TEXT,
-                FOREIGN KEY(user_id) REFERENCES users(id)
-            )''')
+        # Users table
+        c.execute('''CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            username TEXT UNIQUE NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            phone TEXT,
+            dob TEXT,
+            employment TEXT,
+            residence_proof TEXT,
+            id_front TEXT,
+            id_back TEXT,
+            banking_letter TEXT,
+            bank_statement TEXT,
+            is_admin BOOLEAN DEFAULT FALSE,
+            created TEXT,
+            pawn_submissions TEXT,
+            redeem_requests TEXT,
+            purchases TEXT,
+            messages TEXT
+        )''')
+        
+        # Items table
+        c.execute('''CREATE TABLE IF NOT EXISTS items (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            category TEXT,
+            description TEXT,
+            value REAL,
+            rate REAL,
+            days INTEGER,
+            image_url TEXT,
+            for_sale BOOLEAN DEFAULT FALSE,
+            status TEXT DEFAULT 'available',
+            created TEXT
+        )''')
+        
+        # Loans table
+        c.execute('''CREATE TABLE IF NOT EXISTS loans (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            item_id TEXT NOT NULL,
+            amount REAL,
+            rate REAL,
+            due_date TEXT,
+            status TEXT DEFAULT 'active',
+            total_due REAL,
+            created TEXT,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )''')
         
         conn.commit()
         conn.close()
-        print(f"✓ Database initialized ({DB_TYPE.upper()})")
+        print("✓ PostgreSQL database initialized")
     except Exception as e:
-        print(f"Error initializing DB: {e}")
+        print(f"Error initializing PostgreSQL DB: {e}")
+        raise
 
 def load_data_from_db():
-    """Load data from SQLite into memory"""
+    """Load data from PostgreSQL into memory"""
     global users_db, items_db, loans_db
     
     try:
         conn = get_db()
-        c = conn.cursor()
+        c = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         
         # Load users
         c.execute('SELECT * FROM users')
@@ -185,12 +123,12 @@ def load_data_from_db():
         
         conn.close()
         if users_db or items_db or loans_db:
-            print(f"✓ Loaded {len(users_db)} users, {len(items_db)} items, {len(loans_db)} loans from DB")
+            print(f"✓ Loaded {len(users_db)} users, {len(items_db)} items, {len(loans_db)} loans from PostgreSQL")
     except Exception as e:
-        print(f"Error loading from DB: {e}")
+        print(f"Error loading from PostgreSQL: {e}")
 
 def save_data_to_db():
-    """Save data from memory to database (PostgreSQL or SQLite)"""
+    """Save data from memory to PostgreSQL"""
     try:
         conn = get_db()
         c = conn.cursor()
@@ -203,109 +141,60 @@ def save_data_to_db():
             user_copy['purchases'] = json.dumps(user.get('purchases', {}))
             user_copy['messages'] = json.dumps(user.get('messages', []))
             
-            if DB_TYPE == 'postgres':
-                # PostgreSQL - Use INSERT ... ON CONFLICT
-                c.execute('''INSERT INTO users VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT(id) DO UPDATE SET 
-                    username = EXCLUDED.username,
-                    email = EXCLUDED.email,
-                    password_hash = EXCLUDED.password_hash,
-                    phone = EXCLUDED.phone,
-                    dob = EXCLUDED.dob,
-                    employment = EXCLUDED.employment,
-                    residence_proof = EXCLUDED.residence_proof,
-                    id_front = EXCLUDED.id_front,
-                    id_back = EXCLUDED.id_back,
-                    banking_letter = EXCLUDED.banking_letter,
-                    bank_statement = EXCLUDED.bank_statement,
-                    is_admin = EXCLUDED.is_admin,
-                    created = EXCLUDED.created,
-                    pawn_submissions = EXCLUDED.pawn_submissions,
-                    redeem_requests = EXCLUDED.redeem_requests,
-                    purchases = EXCLUDED.purchases,
-                    messages = EXCLUDED.messages''',
-                    (user_copy['id'], user_copy['username'], user_copy['email'], 
-                     user_copy['password_hash'], user_copy.get('phone'), user_copy.get('dob'),
-                     user_copy.get('employment'), user_copy.get('residence_proof'),
-                     user_copy.get('id_front'), user_copy.get('id_back'),
-                     user_copy.get('banking_letter'), user_copy.get('bank_statement'),
-                     user_copy.get('is_admin', False), user_copy.get('created'),
-                     user_copy['pawn_submissions'], user_copy['redeem_requests'],
-                     user_copy['purchases'], user_copy['messages']))
-            else:
-                # SQLite - Use REPLACE
-                c.execute('''REPLACE INTO users VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                    (user_copy['id'], user_copy['username'], user_copy['email'], 
-                     user_copy['password_hash'], user_copy.get('phone'), user_copy.get('dob'),
-                     user_copy.get('employment'), user_copy.get('residence_proof'),
-                     user_copy.get('id_front'), user_copy.get('id_back'),
-                     user_copy.get('banking_letter'), user_copy.get('bank_statement'),
-                     user_copy.get('is_admin', False), user_copy.get('created'),
-                     user_copy['pawn_submissions'], user_copy['redeem_requests'],
-                     user_copy['purchases'], user_copy['messages']))
+            c.execute('''INSERT INTO users VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT(id) DO UPDATE SET 
+                username = EXCLUDED.username,
+                email = EXCLUDED.email,
+                password_hash = EXCLUDED.password_hash,
+                phone = EXCLUDED.phone,
+                dob = EXCLUDED.dob,
+                employment = EXCLUDED.employment,
+                residence_proof = EXCLUDED.residence_proof,
+                id_front = EXCLUDED.id_front,
+                id_back = EXCLUDED.id_back,
+                banking_letter = EXCLUDED.banking_letter,
+                bank_statement = EXCLUDED.bank_statement,
+                is_admin = EXCLUDED.is_admin,
+                created = EXCLUDED.created,
+                pawn_submissions = EXCLUDED.pawn_submissions,
+                redeem_requests = EXCLUDED.redeem_requests,
+                purchases = EXCLUDED.purchases,
+                messages = EXCLUDED.messages''',
+                (user_copy['id'], user_copy['username'], user_copy['email'], 
+                 user_copy['password_hash'], user_copy.get('phone'), user_copy.get('dob'),
+                 user_copy.get('employment'), user_copy.get('residence_proof'),
+                 user_copy.get('id_front'), user_copy.get('id_back'),
+                 user_copy.get('banking_letter'), user_copy.get('bank_statement'),
+                 user_copy.get('is_admin', False), user_copy.get('created'),
+                 user_copy['pawn_submissions'], user_copy['redeem_requests'],
+                 user_copy['purchases'], user_copy['messages']))
         
         # Save items
         for iid, item in items_db.items():
-            if DB_TYPE == 'postgres':
-                c.execute('''INSERT INTO items VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT(id) DO UPDATE SET name = EXCLUDED.name''',
-                    (item['id'], item['name'], item.get('category'), item.get('desc'),
-                     item.get('value'), item.get('rate'), item.get('days'),
-                     item.get('image_url'), item.get('for_sale', False),
-                     item.get('status', 'available'), item.get('created')))
-            else:
-                c.execute('''REPLACE INTO items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                    (item['id'], item['name'], item.get('category'), item.get('desc'),
-                     item.get('value'), item.get('rate'), item.get('days'),
-                     item.get('image_url'), item.get('for_sale', False),
-                     item.get('status', 'available'), item.get('created')))
+            c.execute('''INSERT INTO items VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT(id) DO UPDATE SET name = EXCLUDED.name''',
+                (item['id'], item['name'], item.get('category'), item.get('desc'),
+                 item.get('value'), item.get('rate'), item.get('days'),
+                 item.get('image_url'), item.get('for_sale', False),
+                 item.get('status', 'available'), item.get('created')))
         
         # Save loans
         for lid, loan in loans_db.items():
-            if DB_TYPE == 'postgres':
-                c.execute('''INSERT INTO loans VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT(id) DO UPDATE SET user_id = EXCLUDED.user_id''',
-                    (loan['id'], loan['user'], loan['item'], loan['amount'],
-                     loan['rate'], loan['due'], loan['status'], loan['total_due'],
-                     loan['created']))
-            else:
-                c.execute('''REPLACE INTO loans VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                    (loan['id'], loan['user'], loan['item'], loan['amount'],
-                     loan['rate'], loan['due'], loan['status'], loan['total_due'],
-                     loan['created']))
+            c.execute('''INSERT INTO loans VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT(id) DO UPDATE SET user_id = EXCLUDED.user_id''',
+                (loan['id'], loan['user'], loan['item'], loan['amount'],
+                 loan['rate'], loan['due'], loan['status'], loan['total_due'],
+                 loan['created']))
         
         conn.commit()
         conn.close()
     except Exception as e:
-        print(f"Error saving to DB: {e}")
+        print(f"Error saving to PostgreSQL: {e}")
 
-# Data file paths - try to use absolute paths for AppCreator24
-try:
-    DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
-except:
-    DATA_DIR = 'data'
-
-USERS_FILE = os.path.join(DATA_DIR, 'users.json')
-ITEMS_FILE = os.path.join(DATA_DIR, 'items.json')
-LOANS_FILE = os.path.join(DATA_DIR, 'loans.json')
-
-# Create data directory if it doesn't exist
-try:
-    os.makedirs(DATA_DIR, exist_ok=True)
-except:
-    print("Warning: Could not create data directory, using in-memory storage only")
-
-# In-memory storage (fallback for AppCreator24)
+# In-memory storage (for current session)
 users_db = {}
 items_db = {}
 loans_db = {}
-USE_JSON = True  # Toggle to False if JSON doesn't work
-
-def toggle_storage(use_json=True):
-    global USE_JSON
-    USE_JSON = use_json
-    if not use_json:
-        print("Switched to in-memory storage mode")
 
 def load_data():
     """Load data from SQLite database"""
