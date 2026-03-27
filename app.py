@@ -6,8 +6,7 @@ from functools import wraps
 import json
 import os
 import sys
-import psycopg2
-import psycopg2.extras
+import psycopg
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'pawn_shop_secret_key_2026'
@@ -23,7 +22,7 @@ if not DATABASE_URL:
 def get_db():
     """Get PostgreSQL database connection"""
     try:
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = psycopg.connect(DATABASE_URL)
         return conn
     except Exception as e:
         print(f"PostgreSQL connection error: {e}")
@@ -99,12 +98,12 @@ def load_data_from_db():
     
     try:
         conn = get_db()
-        c = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        c = conn.cursor()
         
         # Load users
         c.execute('SELECT * FROM users')
         for row in c.fetchall():
-            user_dict = dict(row)
+            user_dict = dict(zip([desc[0] for desc in c.description], row))
             user_dict['pawn_submissions'] = json.loads(user_dict.get('pawn_submissions') or '{}')
             user_dict['redeem_requests'] = json.loads(user_dict.get('redeem_requests') or '{}')
             user_dict['purchases'] = json.loads(user_dict.get('purchases') or '{}')
@@ -114,12 +113,14 @@ def load_data_from_db():
         # Load items
         c.execute('SELECT * FROM items')
         for row in c.fetchall():
-            items_db[row['id']] = dict(row)
+            item_dict = dict(zip([desc[0] for desc in c.description], row))
+            items_db[item_dict['id']] = item_dict
         
         # Load loans
         c.execute('SELECT * FROM loans')
         for row in c.fetchall():
-            loans_db[row['id']] = dict(row)
+            loan_dict = dict(zip([desc[0] for desc in c.description], row))
+            loans_db[loan_dict['id']] = loan_dict
         
         conn.close()
         if users_db or items_db or loans_db:
