@@ -718,6 +718,96 @@ def api_redeem_requests():
         })
     return jsonify(result)
 
+@app.route('/api/purchases')
+@login_required
+def api_purchases():
+    uid = session['user_id']
+    user = users_db.get(uid, {})
+    purchases = user.get('purchases', {})
+    result = []
+    for pid, purch in purchases.items():
+        result.append({
+            'id': pid,
+            'item_name': purch.get('item_name'),
+            'price': purch.get('price'),
+            'status': purch.get('status', 'completed'),
+            'created': purch.get('created')
+        })
+    return jsonify(result)
+
+@app.route('/api/messages')
+@login_required
+def api_messages():
+    uid = session['user_id']
+    user = users_db.get(uid, {})
+    messages = user.get('messages', [])
+    return jsonify(messages)
+
+@app.route('/api/send-message', methods=['POST'])
+@login_required
+def api_send_message():
+    uid = session['user_id']
+    user = users_db.get(uid)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    data = request.get_json()
+    text = data.get('text', '').strip()
+    
+    if not text:
+        return jsonify({'error': 'Message cannot be empty'}), 400
+    
+    if 'messages' not in user:
+        user['messages'] = []
+    
+    message = {
+        'sender': user['username'],
+        'text': text,
+        'created': datetime.now().isoformat()
+    }
+    
+    user['messages'].append(message)
+    save_data()
+    
+    return jsonify({'success': True, 'msg': 'Message sent!'}), 200
+
+@app.route('/api/admin/messages/<uid>')
+@admin_required
+def api_admin_messages(uid):
+    user = users_db.get(uid)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    messages = user.get('messages', [])
+    return jsonify(messages)
+
+@app.route('/api/admin/send-message/<uid>', methods=['POST'])
+@admin_required
+def api_admin_send_message(uid):
+    user = users_db.get(uid)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    data = request.get_json()
+    text = data.get('text', '').strip()
+    
+    if not text:
+        return jsonify({'error': 'Message cannot be empty'}), 400
+    
+    if 'messages' not in user:
+        user['messages'] = []
+    
+    message = {
+        'sender': 'admin',
+        'text': text,
+        'created': datetime.now().isoformat()
+    }
+    
+    user['messages'].append(message)
+    save_data()
+    
+    return jsonify({'success': True, 'msg': 'Message sent!'}), 200
+
 @app.route('/api/admin/redeem-requests')
 @admin_required
 def api_admin_redeem_requests():
@@ -2103,8 +2193,9 @@ DASHBOARD_PAGE = '''
         <div style="margin-top: 8px; display: flex; gap: 5px; border-bottom: 2px solid #333; margin-bottom: 12px; flex-wrap: wrap;">
             <button onclick="showTab('loans')" id="loansTab" style="padding: 8px 12px; background: #ffc107; color: #000; border: none; cursor: pointer; font-weight: bold; border-radius: 4px; font-size: 11px;">My Loans</button>
             <button onclick="showTab('pawns')" id="pawnsTab" style="padding: 8px 12px; background: #666; color: #fff; border: none; cursor: pointer; font-weight: bold; border-radius: 4px; font-size: 11px;">Pawn Submissions</button>
+            <button onclick="showTab('purchases')" id="purchasesTab" style="padding: 8px 12px; background: #666; color: #fff; border: none; cursor: pointer; font-weight: bold; border-radius: 4px; font-size: 11px;">Purchases</button>
             <button onclick="showTab('redeems')" id="redeemsTab" style="padding: 8px 12px; background: #666; color: #fff; border: none; cursor: pointer; font-weight: bold; border-radius: 4px; font-size: 11px;">Redemptions</button>
-            <button onclick="showTab('docs')" id="docsTab" style="padding: 8px 12px; background: #666; color: #fff; border: none; cursor: pointer; font-weight: bold; border-radius: 4px; font-size: 11px;">My Documents</button>
+            <button onclick="showTab('chat')" id="chatTab" style="padding: 8px 12px; background: #666; color: #fff; border: none; cursor: pointer; font-weight: bold; border-radius: 4px; font-size: 11px;">💬 Chat Admin</button>
         </div>
 
         <div id="loansSection">
@@ -2131,10 +2222,23 @@ DASHBOARD_PAGE = '''
             </div>
         </div>
 
-        <div id="redeemsSection" style="display: none;">
+        <div id="purchasesSection" style="display: none;">
             <div class="loans">
-                <h2>Redemptions</h2>
-                <div id="redeems"></div>
+                <h2>My Purchases</h2>
+                <div id="purchases"></div>
+            </div>
+        </div>
+
+        <div id="chatSection" style="display: none;">
+            <div class="loans" style="max-height: 600px; display: flex; flex-direction: column;">
+                <h2>💬 Chat with Admin</h2>
+                <div id="chatMessages" style="flex: 1; overflow-y: auto; background: #1a1a24; border: 1px solid #333; border-radius: 8px; padding: 12px; margin-bottom: 12px; max-height: 400px;">
+                    <div class="empty">No messages yet</div>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                    <input type="text" id="chatInput" placeholder="Type a message..." style="flex: 1; padding: 8px; background: #222; color: #fff; border: 1px solid #444; border-radius: 4px; font-size: 12px;">
+                    <button onclick="sendMessage()" style="padding: 8px 16px; background: #ffc107; color: #000; border: none; border-radius: 4px; font-weight: bold; cursor: pointer;">Send</button>
+                </div>
             </div>
         </div>
     </div>
@@ -2143,6 +2247,80 @@ DASHBOARD_PAGE = '''
         const pic = '{{ user.residence_proof or "" }}';
         if (pic && pic.length > 100) {
             document.getElementById('pic').innerHTML = `<img src="${pic}" style="width: 100%; height: 100%; object-fit: cover;">`;
+        }
+
+        async function loadChat() {
+            const res = await fetch('/api/messages');
+            const messages = await res.json();
+            const div = document.getElementById('chatMessages');
+            
+            if (!messages.length) {
+                div.innerHTML = '<div class="empty">No messages yet. Start a conversation!</div>';
+                return;
+            }
+
+            div.innerHTML = messages.map(m => `
+                <div style="margin-bottom: 12px; padding: 8px; background: ${m.sender === 'admin' ? '#2a4a8a' : '#1a3a2a'}; border-radius: 6px; border-left: 3px solid ${m.sender === 'admin' ? '#4a7aff' : '#51cf66'};">
+                    <div style="font-size: 10px; color: #aaa; margin-bottom: 4px;"><strong>${m.sender === 'admin' ? '🔑 Admin' : '👤 You'}</strong> • ${new Date(m.created).toLocaleString()}</div>
+                    <div style="color: #fff; font-size: 12px; word-wrap: break-word;">${m.text}</div>
+                </div>
+            `).join('');
+            
+            div.scrollTop = div.scrollHeight;
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('chatInput');
+            const text = input.value.trim();
+            
+            if (!text) return;
+            
+            const res = await fetch('/api/send-message', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text })
+            });
+            
+            if (res.ok) {
+                input.value = '';
+                loadChat();
+            } else {
+                alert('Failed to send message');
+            }
+        }
+
+        async function loadPurchases() {
+            const res = await fetch('/api/purchases');
+            const purchases = await res.json();
+            const div = document.getElementById('purchases');
+            
+            if (!purchases.length) {
+                div.innerHTML = '<div class="empty">No purchases yet</div>';
+                return;
+            }
+
+            div.innerHTML = purchases.map(p => `
+                <div class="loan">
+                    <div class="loan-head">
+                        <span class="loan-title">${p.item_name}</span>
+                        <span class="status status-${p.status}">${p.status.toUpperCase()}</span>
+                    </div>
+                    <div class="loan-info">
+                        <div>
+                            <span>Price</span>
+                            <span class="info-val">$${p.price.toFixed(2)}</span>
+                        </div>
+                        <div>
+                            <span>Purchased</span>
+                            <span class="info-val">${new Date(p.created).toLocaleDateString()}</span>
+                        </div>
+                        <div>
+                            <span>Status</span>
+                            <span class="info-val">${p.status}</span>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
         }
 
         async function load() {
@@ -2224,39 +2402,51 @@ DASHBOARD_PAGE = '''
         }
 
         function showTab(tab) {
+            // Hide all sections
+            document.getElementById('loansSection').style.display = 'none';
+            document.getElementById('pawnsSection').style.display = 'none';
+            document.getElementById('purchasesSection').style.display = 'none';
+            document.getElementById('redeemsSection').style.display = 'none';
+            document.getElementById('chatSection').style.display = 'none';
+            
+            // Reset all tabs
+            document.getElementById('loansTab').style.background = '#666';
+            document.getElementById('loansTab').style.color = '#fff';
+            document.getElementById('pawnsTab').style.background = '#666';
+            document.getElementById('pawnsTab').style.color = '#fff';
+            document.getElementById('purchasesTab').style.background = '#666';
+            document.getElementById('purchasesTab').style.color = '#fff';
+            document.getElementById('redeemsTab').style.background = '#666';
+            document.getElementById('redeemsTab').style.color = '#fff';
+            document.getElementById('chatTab').style.background = '#666';
+            document.getElementById('chatTab').style.color = '#fff';
+            
+            // Show selected section
             if (tab === 'loans') {
                 document.getElementById('loansSection').style.display = 'block';
-                document.getElementById('pawnsSection').style.display = 'none';
-                document.getElementById('redeemsSection').style.display = 'none';
                 document.getElementById('loansTab').style.background = '#ffc107';
                 document.getElementById('loansTab').style.color = '#000';
-                document.getElementById('pawnsTab').style.background = '#666';
-                document.getElementById('pawnsTab').style.color = '#fff';
-                document.getElementById('redeemsTab').style.background = '#666';
-                document.getElementById('redeemsTab').style.color = '#fff';
                 load();
             } else if (tab === 'pawns') {
-                document.getElementById('loansSection').style.display = 'none';
                 document.getElementById('pawnsSection').style.display = 'block';
-                document.getElementById('redeemsSection').style.display = 'none';
                 document.getElementById('pawnsTab').style.background = '#ffc107';
                 document.getElementById('pawnsTab').style.color = '#000';
-                document.getElementById('loansTab').style.background = '#666';
-                document.getElementById('loansTab').style.color = '#fff';
-                document.getElementById('redeemsTab').style.background = '#666';
-                document.getElementById('redeemsTab').style.color = '#fff';
                 loadPawns();
-            } else {
-                document.getElementById('loansSection').style.display = 'none';
-                document.getElementById('pawnsSection').style.display = 'none';
+            } else if (tab === 'purchases') {
+                document.getElementById('purchasesSection').style.display = 'block';
+                document.getElementById('purchasesTab').style.background = '#ffc107';
+                document.getElementById('purchasesTab').style.color = '#000';
+                loadPurchases();
+            } else if (tab === 'redeems') {
                 document.getElementById('redeemsSection').style.display = 'block';
                 document.getElementById('redeemsTab').style.background = '#ffc107';
                 document.getElementById('redeemsTab').style.color = '#000';
-                document.getElementById('loansTab').style.background = '#666';
-                document.getElementById('loansTab').style.color = '#fff';
-                document.getElementById('pawnsTab').style.background = '#666';
-                document.getElementById('pawnsTab').style.color = '#fff';
                 loadRedeems();
+            } else if (tab === 'chat') {
+                document.getElementById('chatSection').style.display = 'block';
+                document.getElementById('chatTab').style.background = '#4a7aff';
+                document.getElementById('chatTab').style.color = '#fff';
+                loadChat();
             }
         }
 
@@ -2436,6 +2626,7 @@ ADMIN_PAGE = '''
             <button class="tab" onclick="switchtab('pawns')">Pawn Requests</button>
             <button class="tab" onclick="switchtab('purchases')">Purchases</button>
             <button class="tab" onclick="switchtab('redeems')">Redemptions</button>
+            <button class="tab" onclick="switchtab('chat')">💬 Admin Chat</button>
         </div>
         <div id="add" class="content active">
             <form onsubmit="additem(event)">
@@ -2505,6 +2696,23 @@ ADMIN_PAGE = '''
         <div id="purchases" class="content">
             <h3 style="margin-bottom: 20px;">Purchase Requests</h3>
             <div id="purchaseslist"></div>
+        </div>
+        <div id="chat" class="content">
+            <h3 style="margin-bottom: 20px;">💬 Admin Chat Assistant</h3>
+            <div style="display: flex; flex-direction: column; height: 600px; border: 1px solid rgba(255, 193, 7, 0.3); border-radius: 12px; background: rgba(42, 42, 62, 0.3); overflow: hidden;">
+                <div id="chatMessages" style="flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 15px;">
+                    <div style="display: flex; gap: 10px;">
+                        <div style="background: rgba(255, 193, 7, 0.2); padding: 12px 16px; border-radius: 12px; max-width: 80%; border-left: 3px solid #ffc107;">
+                            <p style="margin: 0; color: #ffc107; font-weight: 600; font-size: 12px;">Assistant</p>
+                            <p style="margin: 5px 0 0 0; color: #e0e0e0;">Hi! 👋 I'm your Admin Chat Assistant. Ask me anything about your pawn shop—orders, inventory, user issues, or business insights. Type your question below!</p>
+                        </div>
+                    </div>
+                </div>
+                <div style="padding: 15px; border-top: 1px solid rgba(255, 193, 7, 0.2); display: flex; gap: 10px; background: rgba(42, 42, 62, 0.5);">
+                    <input type="text" id="chatInput" placeholder="Ask me anything..." style="flex: 1; background: rgba(42, 42, 62, 0.8); border: 1px solid rgba(255, 193, 7, 0.3); padding: 12px 16px; border-radius: 8px; color: #e0e0e0;">
+                    <button onclick="sendChat()" style="padding: 12px 24px; background: linear-gradient(135deg, #ffc107, #ffb600); color: #000; border: none; border-radius: 8px; cursor: pointer; font-weight: 600;">Send</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -2802,6 +3010,84 @@ ADMIN_PAGE = '''
                 alert('Error deleting item');
             }
         }
+
+        // Chat Assistant Functions
+        async function sendChat() {
+            const input = document.getElementById('chatInput');
+            const message = input.value.trim();
+            
+            if (!message) return;
+            
+            // Add user message to chat
+            addChatMessage(message, 'user');
+            input.value = '';
+            
+            // Show typing indicator
+            addChatMessage('Typing...', 'assistant-typing');
+            
+            try {
+                const res = await fetch('/api/admin/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: message })
+                });
+                
+                const data = await res.json();
+                
+                // Remove typing indicator
+                const typingMsg = document.querySelector('[data-typing="true"]');
+                if (typingMsg) typingMsg.remove();
+                
+                // Add assistant response
+                if (data.response) {
+                    addChatMessage(data.response, 'assistant');
+                } else {
+                    addChatMessage('Sorry, I had trouble processing that. Try again!', 'assistant');
+                }
+            } catch (error) {
+                console.error('Chat error:', error);
+                // Remove typing indicator
+                const typingMsg = document.querySelector('[data-typing="true"]');
+                if (typingMsg) typingMsg.remove();
+                addChatMessage('Connection error. Please try again.', 'assistant');
+            }
+        }
+        
+        function addChatMessage(text, sender) {
+            const messagesContainer = document.getElementById('chatMessages');
+            const messageDiv = document.createElement('div');
+            
+            if (sender === 'user') {
+                messageDiv.style.cssText = 'display: flex; justify-content: flex-end;';
+                messageDiv.innerHTML = `<div style="background: linear-gradient(135deg, #ffc107, #ffb600); color: #000; padding: 12px 16px; border-radius: 12px; max-width: 80%; text-align: right; font-weight: 500;">${text}</div>`;
+            } else if (sender === 'assistant-typing') {
+                messageDiv.setAttribute('data-typing', 'true');
+                messageDiv.style.cssText = 'display: flex; gap: 10px;';
+                messageDiv.innerHTML = `<div style="background: rgba(255, 193, 7, 0.2); padding: 12px 16px; border-radius: 12px; border-left: 3px solid #ffc107; color: #ffc107;">
+                    <div style="display: flex; gap: 4px;">
+                        <span style="animation: bounce 0.6s infinite;">•</span>
+                        <span style="animation: bounce 0.6s infinite 0.1s;">•</span>
+                        <span style="animation: bounce 0.6s infinite 0.2s;">•</span>
+                    </div>
+                </div>`;
+            } else {
+                messageDiv.style.cssText = 'display: flex; gap: 10px;';
+                messageDiv.innerHTML = `<div style="background: rgba(255, 193, 7, 0.2); padding: 12px 16px; border-radius: 12px; max-width: 80%; border-left: 3px solid #ffc107;">
+                    <p style="margin: 0; color: #ffc107; font-weight: 600; font-size: 12px;">Assistant</p>
+                    <p style="margin: 5px 0 0 0; color: #e0e0e0; white-space: pre-wrap;">${text}</p>
+                </div>`;
+            }
+            
+            messagesContainer.appendChild(messageDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+        
+        // Allow Enter key to send chat
+        document.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter' && document.getElementById('chatInput') === document.activeElement) {
+                sendChat();
+            }
+        });
     </script>
     <footer style="text-align: center; padding: 20px; background: #1a1a1a; border-top: 1px solid #333; margin-top: 40px; color: #999; font-size: 12px;"><p>© 2026 O.P.S Online Pawn Shop - A subsidiary of Africa Micro Group by Keorate Lekolwane (MD - Tswelelo Lekolwane Group Adviser). All rights reserved.</p><p>Designed by Bee</p></footer></body>
 </html>
