@@ -19,6 +19,23 @@ if not DATABASE_URL:
     print("Add this to your environment: DATABASE_URL=postgresql://user:password@host:5432/dbname")
     sys.exit(1)
 
+# Initialize database on startup
+_db_initialized = False
+
+def ensure_db_initialized():
+    """Ensure database is initialized on first request"""
+    global _db_initialized
+    if not _db_initialized:
+        try:
+            init_db()
+            load_data()
+            _db_initialized = True
+            print("✓ Database ready!")
+        except Exception as e:
+            print(f"Error during initialization: {e}")
+
+app.before_request(ensure_db_initialized)
+
 def get_db():
     """Get PostgreSQL database connection"""
     try:
@@ -338,49 +355,92 @@ def check_admin():
 def db_status():
     """Check database status and connectivity"""
     db_info = {
-        'database_file': DB_PATH,
-        'file_exists': os.path.exists(DB_PATH),
+        'database': 'PostgreSQL',
         'memory_data': {
             'users': len(users_db),
             'items': len(items_db),
             'loans': len(loans_db)
         },
-        'database_data': {}
+        'database_data': {},
+        'tables_exist': False
     }
     
-    # Check database connectivity
+    # Check database connectivity and tables
     try:
         conn = get_db()
         c = conn.cursor()
         
-        # Count users in DB
-        c.execute('SELECT COUNT(*) as count FROM users')
-        user_count = c.fetchone()['count']
+        # Check if tables exist
+        c.execute("""
+            SELECT table_name FROM information_schema.tables 
+            WHERE table_schema = 'public'
+        """)
+        tables = [row[0] for row in c.fetchall()]
+        db_info['tables_exist'] = 'users' in tables and 'items' in tables and 'loans' in tables
+        db_info['tables'] = tables
         
-        # Count items in DB
-        c.execute('SELECT COUNT(*) as count FROM items')
-        item_count = c.fetchone()['count']
-        
-        # Count loans in DB
-        c.execute('SELECT COUNT(*) as count FROM loans')
-        loan_count = c.fetchone()['count']
-        
-        db_info['database_data'] = {
-            'users': user_count,
-            'items': item_count,
-            'loans': loan_count
-        }
+        if db_info['tables_exist']:
+            # Count users in DB
+            c.execute('SELECT COUNT(*) FROM users')
+            user_count = c.fetchone()[0]
+            
+            # Count items in DB
+            c.execute('SELECT COUNT(*) FROM items')
+            item_count = c.fetchone()[0]
+            
+            # Count loans in DB
+            c.execute('SELECT COUNT(*) FROM loans')
+            loan_count = c.fetchone()[0]
+            
+            db_info['database_data'] = {
+                'users': user_count,
+                'items': item_count,
+                'loans': loan_count
+            }
         
         db_info['database_connected'] = True
-        db_info['status'] = '✓ Database working perfectly!'
+        db_info['status'] = '✓ Database working perfectly!' if db_info['tables_exist'] else '⚠ Database connected but tables not created yet'
         
         conn.close()
     except Exception as e:
         db_info['database_connected'] = False
         db_info['error'] = str(e)
-        db_info['status'] = '✗ Database connection failed'
+        db_info['status'] = f'✗ Database error: {str(e)}'
     
     return jsonify(db_info), 200
+
+@app.route('/db-init', methods=['POST', 'GET'])
+def db_init():
+    """Manually initialize database tables"""
+    try:
+        init_db()
+        load_data()
+        
+        # Create admin if needed
+        admin_exists = any(u.get('username') == 'admin' for u in users_db.values())
+        
+        if not admin_exists:
+            aid = gen_id()
+            users_db[aid] = {
+                'id': aid, 'username': 'admin', 'email': 'admin@shop.com',
+                'password_hash': 'pbkdf2:sha256:1000000$8oQcBveoiBLZh6KY$7a1d730b7dafee11463aa588d09258e1175111bb1b0703aae598bed26f290a03',
+                'phone': '555-0000', 'dob': '1990-01-01', 'employment': 'employed',
+                'residence_proof': '', 'id_front': '', 'id_back': '',
+                'banking_letter': '', 'bank_statement': '',
+                'is_admin': True, 'created': datetime.now().isoformat(),
+                'pawn_submissions': {}, 'redeem_requests': {}, 'purchases': {}
+            }
+            save_data()
+            print("✓ Admin user created: admin / admin123")
+        
+        return jsonify({
+            'success': True,
+            'msg': 'Database initialized successfully!',
+            'admin_user': 'admin / admin123'
+        }), 200
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/debug/users', methods=['GET'])
 def debug_users():
