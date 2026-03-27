@@ -502,7 +502,101 @@ def db_status():
     
     return jsonify(db_info), 200
 
-@app.route('/db-init', methods=['POST', 'GET'])
+@app.route('/db-reset', methods=['POST', 'GET'])
+def db_reset():
+    """Drop all tables and recreate them"""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        
+        # Drop existing tables
+        print("Dropping existing tables...")
+        c.execute('DROP TABLE IF EXISTS loans CASCADE')
+        c.execute('DROP TABLE IF EXISTS items CASCADE')
+        c.execute('DROP TABLE IF EXISTS users CASCADE')
+        
+        conn.commit()
+        
+        # Recreate tables
+        print("Creating new tables...")
+        c.execute('''CREATE TABLE users (
+            id TEXT PRIMARY KEY,
+            username TEXT UNIQUE NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            phone TEXT,
+            dob TEXT,
+            employment TEXT,
+            residence_proof TEXT,
+            id_front TEXT,
+            id_back TEXT,
+            banking_letter TEXT,
+            bank_statement TEXT,
+            is_admin BOOLEAN DEFAULT FALSE,
+            created TEXT,
+            pawn_submissions TEXT,
+            redeem_requests TEXT,
+            purchases TEXT,
+            messages TEXT
+        )''')
+        
+        c.execute('''CREATE TABLE items (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            category TEXT,
+            description TEXT,
+            value REAL,
+            rate REAL,
+            days INTEGER,
+            image_url TEXT,
+            for_sale BOOLEAN DEFAULT FALSE,
+            status TEXT DEFAULT 'available',
+            created TEXT
+        )''')
+        
+        c.execute('''CREATE TABLE loans (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            item_id TEXT NOT NULL,
+            amount REAL,
+            rate REAL,
+            due_date TEXT,
+            status TEXT DEFAULT 'active',
+            total_due REAL,
+            created TEXT
+        )''')
+        
+        conn.commit()
+        conn.close()
+        
+        # Clear memory
+        users_db.clear()
+        items_db.clear()
+        loans_db.clear()
+        
+        # Create admin
+        aid = gen_id()
+        users_db[aid] = {
+            'id': aid, 'username': 'admin', 'email': 'admin@shop.com',
+            'password_hash': 'pbkdf2:sha256:1000000$8oQcBveoiBLZh6KY$7a1d730b7dafee11463aa588d09258e1175111bb1b0703aae598bed26f290a03',
+            'phone': '555-0000', 'dob': '1990-01-01', 'employment': 'employed',
+            'residence_proof': '', 'id_front': '', 'id_back': '',
+            'banking_letter': '', 'bank_statement': '',
+            'is_admin': True, 'created': datetime.now().isoformat(),
+            'pawn_submissions': {}, 'redeem_requests': {}, 'purchases': {}
+        }
+        save_data()
+        
+        return jsonify({
+            'success': True,
+            'msg': 'Database reset successfully!',
+            'admin_user': 'admin / admin123'
+        }), 200
+    except Exception as e:
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 def db_init():
     """Manually initialize database tables"""
     try:
@@ -539,14 +633,34 @@ def db_init():
 
 @app.route('/debug/info', methods=['GET'])
 def debug_info():
-    """Debug endpoint - show current state"""
-    return jsonify({
-        'users_in_memory': len(users_db),
-        'items_in_memory': len(items_db),
-        'loans_in_memory': len(loans_db),
-        'users': list(users_db.keys()),
-        'sample_user': list(users_db.values())[0] if users_db else None
-    }), 200
+    """Debug endpoint - show current state and schema"""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        
+        # Check users table schema
+        c.execute("""
+            SELECT column_name, data_type 
+            FROM information_schema.columns 
+            WHERE table_name = 'users'
+            ORDER BY ordinal_position
+        """)
+        
+        columns = c.fetchall()
+        col_list = [f"{row[0]} ({row[1]})" for row in columns]
+        
+        conn.close()
+        
+        return jsonify({
+            'users_in_memory': len(users_db),
+            'items_in_memory': len(items_db),
+            'loans_in_memory': len(loans_db),
+            'table_columns': col_list,
+            'users': list(users_db.keys()),
+            'sample_user': list(users_db.values())[0] if users_db else None
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/debug/users', methods=['GET'])
 def debug_users():
