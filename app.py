@@ -119,33 +119,76 @@ def load_data_from_db():
         # Load users
         c.execute('SELECT * FROM users')
         rows = c.fetchall()
-        if rows and c.description:
-            col_names = [desc[0] for desc in c.description]
-            for row in rows:
-                user_dict = dict(zip(col_names, row))
+        col_names = [desc[0] for desc in c.description] if c.description else []
+        
+        print(f"Loading users: found {len(rows)} rows, columns: {col_names}")
+        
+        for row in rows:
+            try:
+                # Convert tuple row to dict
+                if col_names:
+                    user_dict = dict(zip(col_names, row))
+                else:
+                    # Fallback if no description
+                    user_dict = row if isinstance(row, dict) else {}
+                
+                if not user_dict or 'id' not in user_dict:
+                    print(f"Skipping invalid user row: {row}")
+                    continue
+                    
                 user_dict['pawn_submissions'] = json.loads(user_dict.get('pawn_submissions') or '{}')
                 user_dict['redeem_requests'] = json.loads(user_dict.get('redeem_requests') or '{}')
                 user_dict['purchases'] = json.loads(user_dict.get('purchases') or '{}')
                 user_dict['messages'] = json.loads(user_dict.get('messages') or '[]')
                 users_db[user_dict['id']] = user_dict
+                print(f"  Loaded user: {user_dict.get('username')}")
+            except Exception as e:
+                print(f"Error loading user row {row}: {e}")
+                continue
         
         # Load items
         c.execute('SELECT * FROM items')
         rows = c.fetchall()
-        if rows and c.description:
-            col_names = [desc[0] for desc in c.description]
-            for row in rows:
-                item_dict = dict(zip(col_names, row))
+        col_names = [desc[0] for desc in c.description] if c.description else []
+        
+        print(f"Loading items: found {len(rows)} rows")
+        
+        for row in rows:
+            try:
+                if col_names:
+                    item_dict = dict(zip(col_names, row))
+                else:
+                    item_dict = row if isinstance(row, dict) else {}
+                
+                if not item_dict or 'id' not in item_dict:
+                    continue
+                    
                 items_db[item_dict['id']] = item_dict
+            except Exception as e:
+                print(f"Error loading item row {row}: {e}")
+                continue
         
         # Load loans
         c.execute('SELECT * FROM loans')
         rows = c.fetchall()
-        if rows and c.description:
-            col_names = [desc[0] for desc in c.description]
-            for row in rows:
-                loan_dict = dict(zip(col_names, row))
+        col_names = [desc[0] for desc in c.description] if c.description else []
+        
+        print(f"Loading loans: found {len(rows)} rows")
+        
+        for row in rows:
+            try:
+                if col_names:
+                    loan_dict = dict(zip(col_names, row))
+                else:
+                    loan_dict = row if isinstance(row, dict) else {}
+                
+                if not loan_dict or 'id' not in loan_dict:
+                    continue
+                    
                 loans_db[loan_dict['id']] = loan_dict
+            except Exception as e:
+                print(f"Error loading loan row {row}: {e}")
+                continue
         
         conn.close()
         if users_db or items_db or loans_db:
@@ -491,7 +534,20 @@ def db_init():
         }), 200
     except Exception as e:
         print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+
+@app.route('/debug/info', methods=['GET'])
+def debug_info():
+    """Debug endpoint - show current state"""
+    return jsonify({
+        'users_in_memory': len(users_db),
+        'items_in_memory': len(items_db),
+        'loans_in_memory': len(loans_db),
+        'users': list(users_db.keys()),
+        'sample_user': list(users_db.values())[0] if users_db else None
+    }), 200
 
 @app.route('/debug/users', methods=['GET'])
 def debug_users():
@@ -514,32 +570,43 @@ def debug_users():
 
 @app.route('/login', methods=['POST'])
 def login():
-    data = request.get_json()
-    username = data.get('username', '').strip()
-    password = data.get('password', '').strip()
-    
-    if not username or not password:
-        return jsonify({'error': 'Username and password required'}), 400
-    
-    # Search for user
-    for uid, u in users_db.items():
-        if u['username'] == username:
-            # User found, check password
-            try:
-                if check_password_hash(u['password_hash'], password):
-                    session['user_id'] = uid
-                    session['username'] = username
-                    print(f"✓ Login successful: {username}")
-                    return jsonify({'success': True, 'is_admin': u['is_admin']}), 200
-                else:
-                    print(f"✗ Wrong password for user: {username}")
-                    return jsonify({'error': 'Invalid credentials'}), 401
-            except Exception as e:
-                print(f"✗ Password check error for {username}: {e}")
-                return jsonify({'error': 'Invalid credentials'}), 401
-    
-    print(f"✗ User not found: {username}")
-    return jsonify({'error': 'Invalid credentials'}), 401
+    try:
+        data = request.get_json()
+        username = data.get('username', '').strip()
+        password = data.get('password', '').strip()
+        
+        if not username or not password:
+            return jsonify({'error': 'Username and password required'}), 400
+        
+        print(f"Login attempt: {username}")
+        print(f"Users in DB: {len(users_db)}")
+        
+        # Search for user
+        for uid, u in users_db.items():
+            if u['username'] == username:
+                # User found, check password
+                try:
+                    if check_password_hash(u['password_hash'], password):
+                        session['user_id'] = uid
+                        session['username'] = username
+                        print(f"✓ Login successful: {username}")
+                        return jsonify({'success': True, 'is_admin': u['is_admin']}), 200
+                    else:
+                        print(f"✗ Wrong password for user: {username}")
+                        return jsonify({'error': 'Invalid credentials'}), 401
+                except Exception as e:
+                    print(f"✗ Password check error for {username}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    return jsonify({'error': f'Auth error: {str(e)}'}), 401
+        
+        print(f"✗ User not found: {username}")
+        return jsonify({'error': 'Invalid credentials'}), 401
+    except Exception as e:
+        print(f"Login error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Server error: {str(e)}'}), 500
 
 @app.route('/logout')
 def logout():
