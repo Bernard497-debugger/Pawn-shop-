@@ -88,7 +88,7 @@ def init_db():
             created TEXT
         )''')
         
-        # Loans table
+        # Loans table (without foreign key to avoid constraints)
         c.execute('''CREATE TABLE IF NOT EXISTS loans (
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
@@ -98,13 +98,12 @@ def init_db():
             due_date TEXT,
             status TEXT DEFAULT 'active',
             total_due REAL,
-            created TEXT,
-            FOREIGN KEY(user_id) REFERENCES users(id)
+            created TEXT
         )''')
         
         conn.commit()
         conn.close()
-        print("✓ PostgreSQL database initialized")
+        print("✓ PostgreSQL database initialized successfully!")
     except Exception as e:
         print(f"Error initializing PostgreSQL DB: {e}")
         raise
