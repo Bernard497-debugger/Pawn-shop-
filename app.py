@@ -47,6 +47,12 @@ def init_db():
             purchases TEXT
         )''')
         
+        # Add messages column if it doesn't exist (for existing databases)
+        try:
+            c.execute('ALTER TABLE users ADD COLUMN messages TEXT')
+        except:
+            pass  # Column already exists
+        
         # Items table
         c.execute('''CREATE TABLE IF NOT EXISTS items (
             id TEXT PRIMARY KEY,
@@ -97,6 +103,7 @@ def load_data_from_db():
             user_dict['pawn_submissions'] = json.loads(user_dict.get('pawn_submissions') or '{}')
             user_dict['redeem_requests'] = json.loads(user_dict.get('redeem_requests') or '{}')
             user_dict['purchases'] = json.loads(user_dict.get('purchases') or '{}')
+            user_dict['messages'] = json.loads(user_dict.get('messages') or '[]')
             users_db[user_dict['id']] = user_dict
         
         # Load items
@@ -127,6 +134,7 @@ def save_data_to_db():
             user_copy['pawn_submissions'] = json.dumps(user.get('pawn_submissions', {}))
             user_copy['redeem_requests'] = json.dumps(user.get('redeem_requests', {}))
             user_copy['purchases'] = json.dumps(user.get('purchases', {}))
+            user_copy['messages'] = json.dumps(user.get('messages', []))
             
             c.execute('''REPLACE INTO users VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (user_copy['id'], user_copy['username'], user_copy['email'], 
@@ -2195,6 +2203,7 @@ DASHBOARD_PAGE = '''
             <button onclick="showTab('pawns')" id="pawnsTab" style="padding: 8px 12px; background: #666; color: #fff; border: none; cursor: pointer; font-weight: bold; border-radius: 4px; font-size: 11px;">Pawn Submissions</button>
             <button onclick="showTab('purchases')" id="purchasesTab" style="padding: 8px 12px; background: #666; color: #fff; border: none; cursor: pointer; font-weight: bold; border-radius: 4px; font-size: 11px;">Purchases</button>
             <button onclick="showTab('redeems')" id="redeemsTab" style="padding: 8px 12px; background: #666; color: #fff; border: none; cursor: pointer; font-weight: bold; border-radius: 4px; font-size: 11px;">Redemptions</button>
+            <button onclick="showTab('docs')" id="docsTab" style="padding: 8px 12px; background: #666; color: #fff; border: none; cursor: pointer; font-weight: bold; border-radius: 4px; font-size: 11px;">📄 Documents</button>
             <button onclick="showTab('chat')" id="chatTab" style="padding: 8px 12px; background: #666; color: #fff; border: none; cursor: pointer; font-weight: bold; border-radius: 4px; font-size: 11px;">💬 Chat Admin</button>
         </div>
 
@@ -2226,6 +2235,32 @@ DASHBOARD_PAGE = '''
             <div class="loans">
                 <h2>My Purchases</h2>
                 <div id="purchases"></div>
+            </div>
+        </div>
+
+        <div id="docsSection" style="display: none;">
+            <div class="loans">
+                <h2>📄 My Documents</h2>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                    <div style="background: #1a1a24; padding: 12px; border-radius: 8px; border: 1px solid #333;">
+                        <h3 style="margin: 0 0 8px 0; font-size: 12px;">🆔 ID Front</h3>
+                        <div id="idFront" style="width: 100%; height: 150px; background: #0a0a12; border: 1px dashed #444; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #999; overflow: hidden;">
+                            Not uploaded
+                        </div>
+                    </div>
+                    <div style="background: #1a1a24; padding: 12px; border-radius: 8px; border: 1px solid #333;">
+                        <h3 style="margin: 0 0 8px 0; font-size: 12px;">🆔 ID Back</h3>
+                        <div id="idBack" style="width: 100%; height: 150px; background: #0a0a12; border: 1px dashed #444; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #999; overflow: hidden;">
+                            Not uploaded
+                        </div>
+                    </div>
+                    <div style="background: #1a1a24; padding: 12px; border-radius: 8px; border: 1px solid #333; grid-column: 1 / -1;">
+                        <h3 style="margin: 0 0 8px 0; font-size: 12px;">🏠 Residence Proof</h3>
+                        <div id="residenceProof" style="width: 100%; height: 150px; background: #0a0a12; border: 1px dashed #444; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #999; overflow: hidden;">
+                            Not uploaded
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -2323,6 +2358,28 @@ DASHBOARD_PAGE = '''
             `).join('');
         }
 
+        function loadDocs() {
+            const idFrontDiv = document.getElementById('idFront');
+            const idBackDiv = document.getElementById('idBack');
+            const residenceProofDiv = document.getElementById('residenceProof');
+            
+            const idFront = '{{ user.id_front or "" }}';
+            const idBack = '{{ user.id_back or "" }}';
+            const residenceProof = '{{ user.residence_proof or "" }}';
+            
+            if (idFront && idFront.length > 100) {
+                idFrontDiv.innerHTML = `<img src="${idFront}" style="width: 100%; height: 100%; object-fit: cover;">`;
+            }
+            
+            if (idBack && idBack.length > 100) {
+                idBackDiv.innerHTML = `<img src="${idBack}" style="width: 100%; height: 100%; object-fit: cover;">`;
+            }
+            
+            if (residenceProof && residenceProof.length > 100) {
+                residenceProofDiv.innerHTML = `<img src="${residenceProof}" style="width: 100%; height: 100%; object-fit: cover;">`;
+            }
+        }
+
         async function load() {
             const res = await fetch('/api/loans');
             const loans = await res.json();
@@ -2407,6 +2464,7 @@ DASHBOARD_PAGE = '''
             document.getElementById('pawnsSection').style.display = 'none';
             document.getElementById('purchasesSection').style.display = 'none';
             document.getElementById('redeemsSection').style.display = 'none';
+            document.getElementById('docsSection').style.display = 'none';
             document.getElementById('chatSection').style.display = 'none';
             
             // Reset all tabs
@@ -2418,6 +2476,8 @@ DASHBOARD_PAGE = '''
             document.getElementById('purchasesTab').style.color = '#fff';
             document.getElementById('redeemsTab').style.background = '#666';
             document.getElementById('redeemsTab').style.color = '#fff';
+            document.getElementById('docsTab').style.background = '#666';
+            document.getElementById('docsTab').style.color = '#fff';
             document.getElementById('chatTab').style.background = '#666';
             document.getElementById('chatTab').style.color = '#fff';
             
@@ -2442,6 +2502,11 @@ DASHBOARD_PAGE = '''
                 document.getElementById('redeemsTab').style.background = '#ffc107';
                 document.getElementById('redeemsTab').style.color = '#000';
                 loadRedeems();
+            } else if (tab === 'docs') {
+                document.getElementById('docsSection').style.display = 'block';
+                document.getElementById('docsTab').style.background = '#ffc107';
+                document.getElementById('docsTab').style.color = '#000';
+                loadDocs();
             } else if (tab === 'chat') {
                 document.getElementById('chatSection').style.display = 'block';
                 document.getElementById('chatTab').style.background = '#4a7aff';
