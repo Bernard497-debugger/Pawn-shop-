@@ -6,28 +6,31 @@ from functools import wraps
 import json
 import os
 import sys
-import sqlite3
+import psycopg2
+import psycopg2.extras
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'pawn_shop_secret_key_2026'
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'pawn_shop_secret_key_2026')
 
-# Database configuration
-DB_PATH = 'pawn_shop.db'
+# ── PostgreSQL via DATABASE_URL (set this in Render environment variables) ────
+DATABASE_URL = os.environ.get('DATABASE_URL', '')
 
 def get_db():
-    """Get database connection"""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    """Open a new PostgreSQL connection."""
+    conn = psycopg2.connect(DATABASE_URL)
     return conn
 
+def get_cursor(conn):
+    """Return a dict-like cursor."""
+    return conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
 def init_db():
-    """Initialize SQLite database"""
+    """Create tables if they don't exist and seed admin."""
     try:
         conn = get_db()
-        c = conn.cursor()
-        
-        # Users table
-        c.execute('''CREATE TABLE IF NOT EXISTS users (
+        c = get_cursor(conn)
+
+        c.execute("""CREATE TABLE IF NOT EXISTS users (
             id TEXT PRIMARY KEY,
             username TEXT UNIQUE NOT NULL,
             email TEXT UNIQUE NOT NULL,
@@ -40,21 +43,15 @@ def init_db():
             id_back TEXT,
             banking_letter TEXT,
             bank_statement TEXT,
-            is_admin BOOLEAN DEFAULT 0,
+            is_admin BOOLEAN DEFAULT FALSE,
             created TEXT,
             pawn_submissions TEXT,
             redeem_requests TEXT,
-            purchases TEXT
-        )''')
-        
-        # Add messages column if it doesn't exist (for existing databases)
-        try:
-            c.execute('ALTER TABLE users ADD COLUMN messages TEXT')
-        except:
-            pass  # Column already exists
-        
-        # Items table
-        c.execute('''CREATE TABLE IF NOT EXISTS items (
+            purchases TEXT,
+            messages TEXT
+        )""")
+
+        c.execute("""CREATE TABLE IF NOT EXISTS items (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             category TEXT,
@@ -63,13 +60,12 @@ def init_db():
             rate REAL,
             days INTEGER,
             image_url TEXT,
-            for_sale BOOLEAN DEFAULT 0,
+            for_sale BOOLEAN DEFAULT FALSE,
             status TEXT DEFAULT 'available',
             created TEXT
-        )''')
-        
-        # Loans table
-        c.execute('''CREATE TABLE IF NOT EXISTS loans (
+        )""")
+
+        c.execute("""CREATE TABLE IF NOT EXISTS loans (
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
             item_id TEXT NOT NULL,
@@ -78,128 +74,129 @@ def init_db():
             due_date TEXT,
             status TEXT DEFAULT 'active',
             total_due REAL,
-            created TEXT,
-            FOREIGN KEY(user_id) REFERENCES users(id)
-        )''')
-        
+            created TEXT
+        )""")
+
         conn.commit()
         conn.close()
-        print("✓ Database initialized")
+        print("✓ PostgreSQL tables ready")
     except Exception as e:
         print(f"Error initializing DB: {e}")
 
 def load_data_from_db():
-    """Load data from SQLite into memory"""
+    """Load all rows from PostgreSQL into in-memory dicts."""
     global users_db, items_db, loans_db
-    
     try:
         conn = get_db()
-        c = conn.cursor()
-        
-        # Load users
-        c.execute('SELECT * FROM users')
+        c = get_cursor(conn)
+
+        c.execute("SELECT * FROM users")
         for row in c.fetchall():
-            user_dict = dict(row)
-            user_dict['pawn_submissions'] = json.loads(user_dict.get('pawn_submissions') or '{}')
-            user_dict['redeem_requests'] = json.loads(user_dict.get('redeem_requests') or '{}')
-            user_dict['purchases'] = json.loads(user_dict.get('purchases') or '{}')
-            user_dict['messages'] = json.loads(user_dict.get('messages') or '[]')
-            users_db[user_dict['id']] = user_dict
-        
-        # Load items
-        c.execute('SELECT * FROM items')
+            u = dict(row)
+            u['pawn_submissions'] = json.loads(u.get('pawn_submissions') or '{}')
+            u['redeem_requests']  = json.loads(u.get('redeem_requests')  or '{}')
+            u['purchases']        = json.loads(u.get('purchases')        or '{}')
+            u['messages']         = json.loads(u.get('messages')         or '[]')
+            users_db[u['id']] = u
+
+        c.execute("SELECT * FROM items")
         for row in c.fetchall():
             items_db[row['id']] = dict(row)
-        
-        # Load loans - map DB column names to in-memory keys used throughout app
-        c.execute('SELECT * FROM loans')
+
+        c.execute("SELECT * FROM loans")
         for row in c.fetchall():
             loan = dict(row)
+            # remap DB column names to in-memory keys used throughout the app
             loan['user'] = loan.pop('user_id')
             loan['item'] = loan.pop('item_id')
-            loan['due'] = loan.pop('due_date')
+            loan['due']  = loan.pop('due_date')
             loans_db[loan['id']] = loan
-        
+
         conn.close()
         if users_db or items_db or loans_db:
-            print(f"✓ Loaded {len(users_db)} users, {len(items_db)} items, {len(loans_db)} loans from DB")
+            print(f"✓ Loaded {len(users_db)} users, {len(items_db)} items, {len(loans_db)} loans")
     except Exception as e:
         print(f"Error loading from DB: {e}")
 
 def save_data_to_db():
-    """Save data from memory to SQLite"""
+    """Upsert all in-memory data back to PostgreSQL."""
     try:
         conn = get_db()
-        c = conn.cursor()
-        
-        # Save users
+        c = get_cursor(conn)
+
+        # Users
         for uid, user in users_db.items():
-            user_copy = user.copy()
-            user_copy['pawn_submissions'] = json.dumps(user.get('pawn_submissions', {}))
-            user_copy['redeem_requests'] = json.dumps(user.get('redeem_requests', {}))
-            user_copy['purchases'] = json.dumps(user.get('purchases', {}))
-            user_copy['messages'] = json.dumps(user.get('messages', []))
-            
-            c.execute('''REPLACE INTO users VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                (user_copy['id'], user_copy['username'], user_copy['email'], 
-                 user_copy['password_hash'], user_copy.get('phone'), user_copy.get('dob'),
-                 user_copy.get('employment'), user_copy.get('residence_proof'),
-                 user_copy.get('id_front'), user_copy.get('id_back'),
-                 user_copy.get('banking_letter'), user_copy.get('bank_statement'),
-                 user_copy.get('is_admin', False), user_copy.get('created'),
-                 user_copy['pawn_submissions'], user_copy['redeem_requests'],
-                 user_copy['purchases'], user_copy['messages']))
-        
-        # Save items
+            u = user.copy()
+            u['pawn_submissions'] = json.dumps(u.get('pawn_submissions', {}))
+            u['redeem_requests']  = json.dumps(u.get('redeem_requests',  {}))
+            u['purchases']        = json.dumps(u.get('purchases',        {}))
+            u['messages']         = json.dumps(u.get('messages',         []))
+            c.execute("""
+                INSERT INTO users
+                    (id,username,email,password_hash,phone,dob,employment,
+                     residence_proof,id_front,id_back,banking_letter,bank_statement,
+                     is_admin,created,pawn_submissions,redeem_requests,purchases,messages)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (id) DO UPDATE SET
+                    username=EXCLUDED.username, email=EXCLUDED.email,
+                    password_hash=EXCLUDED.password_hash, phone=EXCLUDED.phone,
+                    dob=EXCLUDED.dob, employment=EXCLUDED.employment,
+                    residence_proof=EXCLUDED.residence_proof, id_front=EXCLUDED.id_front,
+                    id_back=EXCLUDED.id_back, banking_letter=EXCLUDED.banking_letter,
+                    bank_statement=EXCLUDED.bank_statement, is_admin=EXCLUDED.is_admin,
+                    created=EXCLUDED.created, pawn_submissions=EXCLUDED.pawn_submissions,
+                    redeem_requests=EXCLUDED.redeem_requests, purchases=EXCLUDED.purchases,
+                    messages=EXCLUDED.messages
+            """, (u['id'], u['username'], u['email'], u['password_hash'],
+                  u.get('phone'), u.get('dob'), u.get('employment'),
+                  u.get('residence_proof'), u.get('id_front'), u.get('id_back'),
+                  u.get('banking_letter'), u.get('bank_statement'),
+                  u.get('is_admin', False), u.get('created'),
+                  u['pawn_submissions'], u['redeem_requests'],
+                  u['purchases'], u['messages']))
+
+        # Items
         for iid, item in items_db.items():
-            c.execute('''REPLACE INTO items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                (item['id'], item['name'], item.get('category'), item.get('desc'),
-                 item.get('value'), item.get('rate'), item.get('days'),
-                 item.get('image_url'), item.get('for_sale', False),
-                 item.get('status', 'available'), item.get('created')))
-        
-        # Save loans - map in-memory keys to DB column names
+            c.execute("""
+                INSERT INTO items
+                    (id,name,category,desc,value,rate,days,image_url,for_sale,status,created)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (id) DO UPDATE SET
+                    name=EXCLUDED.name, category=EXCLUDED.category, desc=EXCLUDED.desc,
+                    value=EXCLUDED.value, rate=EXCLUDED.rate, days=EXCLUDED.days,
+                    image_url=EXCLUDED.image_url, for_sale=EXCLUDED.for_sale,
+                    status=EXCLUDED.status, created=EXCLUDED.created
+            """, (item['id'], item['name'], item.get('category'), item.get('desc'),
+                  item.get('value'), item.get('rate'), item.get('days'),
+                  item.get('image_url'), item.get('for_sale', False),
+                  item.get('status', 'available'), item.get('created')))
+
+        # Loans
         for lid, loan in loans_db.items():
-            c.execute('''REPLACE INTO loans VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                (loan['id'], loan['user'], loan['item'], loan['amount'],
-                 loan['rate'], loan['due'], loan['status'], loan['total_due'],
-                 loan.get('created')))
-        
+            c.execute("""
+                INSERT INTO loans
+                    (id,user_id,item_id,amount,rate,due_date,status,total_due,created)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (id) DO UPDATE SET
+                    user_id=EXCLUDED.user_id, item_id=EXCLUDED.item_id,
+                    amount=EXCLUDED.amount, rate=EXCLUDED.rate,
+                    due_date=EXCLUDED.due_date, status=EXCLUDED.status,
+                    total_due=EXCLUDED.total_due, created=EXCLUDED.created
+            """, (loan['id'], loan['user'], loan['item'], loan['amount'],
+                  loan['rate'], loan['due'], loan['status'], loan['total_due'],
+                  loan.get('created')))
+
         conn.commit()
         conn.close()
     except Exception as e:
         print(f"Error saving to DB: {e}")
 
-# Data file paths - try to use absolute paths for AppCreator24
-try:
-    DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
-except:
-    DATA_DIR = 'data'
-
-USERS_FILE = os.path.join(DATA_DIR, 'users.json')
-ITEMS_FILE = os.path.join(DATA_DIR, 'items.json')
-LOANS_FILE = os.path.join(DATA_DIR, 'loans.json')
-
-# Create data directory if it doesn't exist
-try:
-    os.makedirs(DATA_DIR, exist_ok=True)
-except:
-    print("Warning: Could not create data directory, using in-memory storage only")
-
-# In-memory storage (fallback for AppCreator24)
+# In-memory cache
 users_db = {}
 items_db = {}
 loans_db = {}
-USE_JSON = True  # Toggle to False if JSON doesn't work
-
-def toggle_storage(use_json=True):
-    global USE_JSON
-    USE_JSON = use_json
-    if not use_json:
-        print("Switched to in-memory storage mode")
 
 def load_data():
-    """Load data from SQLite database"""
     load_data_from_db()
 
 def save_data():
@@ -4205,9 +4202,11 @@ def init():
         except Exception as e:
             print(f"Error creating admin: {e}")
 
+# Run init at module level so gunicorn/uwsgi picks it up (not just __main__)
+try:
+    init()
+except Exception as e:
+    print(f"Init error: {e}")
+
 if __name__ == '__main__':
-    try:
-        init()
-    except Exception as e:
-        print(f"Init error: {e}")
     app.run(debug=False, host='0.0.0.0', port=5000)
