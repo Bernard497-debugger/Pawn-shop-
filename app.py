@@ -58,7 +58,7 @@ def init_db():
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             category TEXT,
-            description TEXT,
+            desc TEXT,
             value REAL,
             rate REAL,
             days INTEGER,
@@ -111,10 +111,14 @@ def load_data_from_db():
         for row in c.fetchall():
             items_db[row['id']] = dict(row)
         
-        # Load loans
+        # Load loans - map DB column names to in-memory keys used throughout app
         c.execute('SELECT * FROM loans')
         for row in c.fetchall():
-            loans_db[row['id']] = dict(row)
+            loan = dict(row)
+            loan['user'] = loan.pop('user_id')
+            loan['item'] = loan.pop('item_id')
+            loan['due'] = loan.pop('due_date')
+            loans_db[loan['id']] = loan
         
         conn.close()
         if users_db or items_db or loans_db:
@@ -136,7 +140,7 @@ def save_data_to_db():
             user_copy['purchases'] = json.dumps(user.get('purchases', {}))
             user_copy['messages'] = json.dumps(user.get('messages', []))
             
-            c.execute('''REPLACE INTO users VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+            c.execute('''REPLACE INTO users VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (user_copy['id'], user_copy['username'], user_copy['email'], 
                  user_copy['password_hash'], user_copy.get('phone'), user_copy.get('dob'),
                  user_copy.get('employment'), user_copy.get('residence_proof'),
@@ -144,7 +148,7 @@ def save_data_to_db():
                  user_copy.get('banking_letter'), user_copy.get('bank_statement'),
                  user_copy.get('is_admin', False), user_copy.get('created'),
                  user_copy['pawn_submissions'], user_copy['redeem_requests'],
-                 user_copy['purchases']))
+                 user_copy['purchases'], user_copy['messages']))
         
         # Save items
         for iid, item in items_db.items():
@@ -154,12 +158,12 @@ def save_data_to_db():
                  item.get('image_url'), item.get('for_sale', False),
                  item.get('status', 'available'), item.get('created')))
         
-        # Save loans
+        # Save loans - map in-memory keys to DB column names
         for lid, loan in loans_db.items():
             c.execute('''REPLACE INTO loans VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (loan['id'], loan['user'], loan['item'], loan['amount'],
                  loan['rate'], loan['due'], loan['status'], loan['total_due'],
-                 loan['created']))
+                 loan.get('created')))
         
         conn.commit()
         conn.close()
@@ -1122,7 +1126,7 @@ def api_approve_pawn(uid, pid):
     loans_db[lid] = {
         'id': lid,
         'user': uid,
-        'item': pawn.get('item_name', 'Unknown Item'),  # Store item name instead of pawn ID
+        'item': pawn.get('name', 'Unknown Item'),  # Store item name instead of pawn ID
         'item_description': pawn.get('description', ''),
         'amount': loan_amt,
         'rate': interest,
